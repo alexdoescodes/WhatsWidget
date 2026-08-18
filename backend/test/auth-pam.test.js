@@ -58,3 +58,55 @@ test('a success resets the backoff', async () => {
   const again = await auth.verify('wrong');
   assert.strictEqual(again.retryAfterMs, 2000);
 });
+
+test('concurrent calls are throttled', async () => {
+  let clock = 0;
+  const calls = [];
+  let deferredCb;
+
+  const auth = createAuthenticator({
+    service: 'whatsapp-widget',
+    username: 'tester',
+    now: () => clock,
+    pamAuthenticate: (user, password, cb, opts) => {
+      calls.push({ user, password, opts });
+      // Defer the callback so we can fire multiple verify() calls before PAM resolves
+      deferredCb = cb;
+    },
+  });
+
+  // Fire two verify calls before either PAM callback resolves
+  const p1 = auth.verify('wrong');
+  const p2 = auth.verify('wrong');
+
+  // At this point, both calls have been issued, but no PAM callback has fired yet
+  // The race condition would be: both calls pass throttleState and hit PAM.
+  // The fix reserves the slot synchronously, so only the first should hit PAM.
+  assert.strictEqual(calls.length, 1, 'exactly one PAM call should be made');
+
+  // Now resolve the first PAM call
+  deferredCb(new Error('auth failed'));
+
+  // Both verify promises should now resolve
+  const r1 = await p1;
+  const r2 = await p2;
+
+  // First should be invalid (hit PAM), second should be throttled
+  assert.strictEqual(r1.ok, false);
+  assert.strictEqual(r1.reason, 'invalid');
+
+  assert.strictEqual(r2.ok, false);
+  assert.strictEqual(r2.reason, 'throttled');
+});
+
+test('createAuthenticator requires an explicit service name', async () => {
+  assert.throws(
+    () => createAuthenticator({ service: '' }),
+    /requires an explicit PAM service name/
+  );
+
+  assert.throws(
+    () => createAuthenticator({}),
+    /requires an explicit PAM service name/
+  );
+});

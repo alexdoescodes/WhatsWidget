@@ -18,6 +18,10 @@ function createAuthenticator({
   now = Date.now,
   maxDelayMs = 30000,
 } = {}) {
+  if (!service) {
+    throw new Error('createAuthenticator requires an explicit PAM service name');
+  }
+
   let failures = 0;
   let blockedUntil = 0;
 
@@ -32,6 +36,13 @@ function createAuthenticator({
       return { ok: false, reason: 'throttled', retryAfterMs: state.retryAfterMs };
     }
 
+    // Reserve the slot synchronously: a concurrent caller must see the block
+    // before this call's PAM round-trip completes, otherwise the backoff is
+    // bypassable by simply issuing requests in parallel.
+    failures += 1;
+    const retryAfterMs = Math.min(2 ** failures * 1000, maxDelayMs);
+    blockedUntil = now() + retryAfterMs;
+
     const ok = await new Promise((resolve) => {
       pamAuthenticate(username, password, (err) => resolve(!err), { serviceName: service });
     });
@@ -42,9 +53,6 @@ function createAuthenticator({
       return { ok: true };
     }
 
-    failures += 1;
-    const retryAfterMs = Math.min(2 ** failures * 1000, maxDelayMs);
-    blockedUntil = now() + retryAfterMs;
     return { ok: false, reason: 'invalid', retryAfterMs };
   }
 
