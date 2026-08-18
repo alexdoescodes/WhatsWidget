@@ -34,6 +34,8 @@ function createWhatsAppClient({
   let sock = null;
   let status = 'connecting';
   let qrPng = null;
+  let reconnectTimer = null;
+  let starting = false;
 
   function setStatus(next) {
     if (status === next) return;
@@ -42,57 +44,77 @@ function createWhatsAppClient({
   }
 
   async function start() {
-    const { state, saveCreds } = await authState(sessionDir);
-    sock = makeSocket({ auth: state, printQRInTerminal: false, syncFullHistory: false });
-
-    sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('connection.update', async (update) => {
-      const { connection, lastDisconnect, qr } = update;
-
-      if (qr) {
-        try {
-          qrPng = await qrToBuffer(qr);
-          setStatus('needs-pairing');
-        } catch (err) {
-          logger.error('failed to render pairing QR:', err.message);
+    if (starting) return;
+    starting = true;
+    try {
+      if (sock) {
+        // Drop the old socket's listeners before replacing it, otherwise every
+        // reconnect leaves another live listener set attached.
+        sock.ev.removeAllListeners();
+        if (typeof sock.end === 'function') {
+          try { sock.end(); } catch { /* already closed */ }
         }
+        sock = null;
       }
 
-      if (connection === 'open') {
-        qrPng = null;
-        setStatus('connected');
-      }
+      const { state, saveCreds } = await authState(sessionDir);
+      sock = makeSocket({ auth: state, printQRInTerminal: false, syncFullHistory: false });
 
-      if (connection === 'close') {
-        const code = lastDisconnect?.error?.output?.statusCode;
-        if (code === DisconnectReason.loggedOut) {
-          // Session revoked from the phone: fall back to pairing.
+      sock.ev.on('creds.update', saveCreds);
+
+      sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        if (qr) {
+          try {
+            qrPng = await qrToBuffer(qr);
+            setStatus('needs-pairing');
+          } catch (err) {
+            logger.error('failed to render pairing QR:', err.message);
+          }
+        }
+
+        if (connection === 'open') {
           qrPng = null;
-          setStatus('needs-pairing');
-        } else {
-          setStatus('disconnected');
+          setStatus('connected');
         }
-        setTimeout(() => { start().catch((e) => logger.error('reconnect failed:', e.message)); }, reconnectDelayMs);
-      }
-    });
 
-    sock.ev.on('messages.upsert', ({ messages, type }) => {
-      if (type !== 'notify') return;
-      for (const waMessage of messages) {
-        const jid = waMessage.key?.remoteJid;
-        if (!jid) continue;
-        const fromMe = Boolean(waMessage.key.fromMe);
-        const message = {
-          id: waMessage.key.id,
-          fromMe,
-          text: extractText(waMessage.message),
-          timestamp: Number(waMessage.messageTimestamp) || 0,
-        };
-        store.addMessage(jid, message, { incrementUnread: !fromMe, name: waMessage.pushName });
-        events.emit('message', { jid, message });
-      }
-    });
+        if (connection === 'close') {
+          const code = lastDisconnect?.error?.output?.statusCode;
+          if (code === DisconnectReason.loggedOut) {
+            // Session revoked from the phone: fall back to pairing.
+            qrPng = null;
+            setStatus('needs-pairing');
+          } else {
+            setStatus('disconnected');
+          }
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            start().catch((e) => logger.error('reconnect failed:', e.message));
+          }, reconnectDelayMs);
+        }
+      });
+
+      sock.ev.on('messages.upsert', ({ messages, type }) => {
+        if (type !== 'notify') return;
+        for (const waMessage of messages) {
+          const jid = waMessage.key?.remoteJid;
+          if (!jid) continue;
+          const fromMe = Boolean(waMessage.key.fromMe);
+          const message = {
+            id: waMessage.key.id,
+            fromMe,
+            text: extractText(waMessage.message),
+            timestamp: Number(waMessage.messageTimestamp) || 0,
+          };
+          store.addMessage(jid, message, { incrementUnread: !fromMe, name: waMessage.pushName });
+          events.emit('message', { jid, message });
+        }
+      });
+    } finally {
+      starting = false;
+    }
   }
 
   async function sendMessage(jid, text) {

@@ -4,6 +4,7 @@ const assert = require('node:assert');
 const { EventEmitter } = require('node:events');
 const { createWhatsAppClient, extractText } = require('../src/whatsapp');
 const { createStore } = require('../src/store');
+const { DisconnectReason } = require('baileys');
 
 function fakeSocket() {
   const ev = new EventEmitter();
@@ -101,4 +102,59 @@ test('extractText handles plain and extended text, and unsupported kinds', () =>
   assert.strictEqual(extractText({ imageMessage: { caption: 'c' } }), 'c');
   assert.strictEqual(extractText({ stickerMessage: {} }), '[unsupported message]');
   assert.strictEqual(extractText(null), '');
+});
+
+test('duplicate close events arm only one reconnect', async () => {
+  const store = createStore({});
+  let calls = 0;
+  const socks = [];
+  function countingMakeSocket() {
+    calls += 1;
+    const s = fakeSocket();
+    socks.push(s);
+    return s;
+  }
+  const client = createWhatsAppClient({
+    sessionDir: '/tmp/unused',
+    store,
+    makeSocket: countingMakeSocket,
+    authState: async () => ({ state: {}, saveCreds: async () => {} }),
+    qrToBuffer: async (text) => Buffer.from(`png:${text}`),
+    reconnectDelayMs: 0,
+  });
+
+  await client.start();
+  assert.strictEqual(calls, 1);
+
+  const sock = socks[0];
+  const closeUpdate = {
+    connection: 'close',
+    lastDisconnect: { error: { output: { statusCode: 428 } } },
+  };
+  sock.ev.emit('connection.update', closeUpdate);
+  sock.ev.emit('connection.update', closeUpdate);
+
+  // Let the (single, guarded) reconnect timer flush.
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.strictEqual(calls, 2);
+});
+
+test('logged-out close goes to needs-pairing, not disconnected', async () => {
+  const { client, sock } = build();
+  await client.start();
+
+  sock.ev.emit('connection.update', {
+    connection: 'close',
+    lastDisconnect: { error: { output: { statusCode: DisconnectReason.loggedOut } } },
+  });
+  await new Promise((r) => setImmediate(r));
+
+  assert.strictEqual(client.getStatus(), 'needs-pairing');
+  assert.strictEqual(client.getQrPng(), null);
+
+  // The close handler still arms a reconnect timer (reconnectDelayMs: 0
+  // from build()) even on a logged-out close; let it flush before the
+  // test ends so no timer is left dangling.
+  await new Promise((r) => setTimeout(r, 20));
 });
