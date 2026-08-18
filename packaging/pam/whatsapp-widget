@@ -1,0 +1,13 @@
+#%PAM-1.0
+# Password verification for the WhatsApp widget's privacy unlock.
+#
+# Deliberately does NOT include pam_faillock. The general-purpose services on
+# this system (login -> system-local-login -> system-auth) do include it, and
+# with no /etc/faillock.conf the defaults apply: 3 failures locks the real user
+# account for 10 minutes. A mistyped password in a chat widget must never be
+# able to lock the user out of their own machine.
+#
+# Brute-force protection is enforced by the widget backend instead, as
+# exponential backoff (see backend/src/auth-pam.js).
+auth     required   pam_unix.so
+account  required   pam_unix.so
