@@ -5,17 +5,18 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
+const WebSocket = require('ws');
 const { createServer } = require('../src/server');
 const { createStore } = require('../src/store');
 
-function build({ verify = async () => ({ ok: true }) } = {}) {
+function build({ verify = async () => ({ ok: true }), sendMessage } = {}) {
   const store = createStore({});
   const events = new EventEmitter();
   const client = {
     events,
     getStatus: () => 'connected',
     getQrPng: () => null,
-    sendMessage: async (jid, text) => { client.sent = { jid, text }; },
+    sendMessage: sendMessage || (async (jid, text) => { client.sent = { jid, text }; }),
   };
   const endpointFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ww-')), 'endpoint.json');
   const server = createServer({ client, store, authenticator: { verify }, endpointFile });
@@ -97,5 +98,61 @@ test('unlock returns 401 for an invalid password', async () => {
     body: JSON.stringify({ password: 'nope' }),
   });
   assert.strictEqual(res.status, 401);
+  await server.close();
+});
+
+test('pushes client events to a connected websocket subscriber', async () => {
+  const { server, events } = build();
+  const { token } = await server.listen();
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/events`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  await new Promise((resolve, reject) => {
+    ws.once('open', resolve);
+    ws.once('error', reject);
+  });
+
+  const nextFrame = () => new Promise((resolve, reject) => {
+    ws.once('message', (data) => {
+      try {
+        resolve(JSON.parse(data.toString()));
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+
+  const messageFramePromise = nextFrame();
+  events.emit('message', { jid: 'friend@s.whatsapp.net', message: { id: '1', text: 'hi' } });
+  const messageFrame = await messageFramePromise;
+  assert.strictEqual(messageFrame.type, 'message');
+  assert.strictEqual(messageFrame.jid, 'friend@s.whatsapp.net');
+  assert.deepStrictEqual(messageFrame.message, { id: '1', text: 'hi' });
+  assert.strictEqual(typeof messageFrame.unread, 'number');
+
+  const statusFramePromise = nextFrame();
+  events.emit('status', 'connected');
+  const statusFrame = await statusFramePromise;
+  assert.deepStrictEqual(statusFrame, { type: 'status', status: 'connected' });
+
+  await new Promise((resolve) => {
+    ws.once('close', resolve);
+    ws.close();
+  });
+  await server.close();
+});
+
+test('returns 503 when the client fails to send a message', async () => {
+  const { server } = build({ sendMessage: async () => { throw new Error('boom'); } });
+  const { token } = await server.listen();
+  const res = await fetch(`http://127.0.0.1:${server.port}/chats/friend%40s.whatsapp.net/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: 'hi' }),
+  });
+  assert.strictEqual(res.status, 503);
+  assert.deepStrictEqual(await res.json(), { error: 'boom' });
   await server.close();
 });
