@@ -56,12 +56,33 @@ the reverse-engineered protocol code isolated, independently testable via
   (Puppeteer), which would cost ~200-300MB RAM and meaningfully more CPU for
   a process meant to run continuously in the background. Baileys is
   event-driven (no polling), which also matches the low-idle-footprint goal.
-- **Transport:** HTTP + WebSocket server bound to a **Unix domain socket**
-  (e.g. `$XDG_RUNTIME_DIR/whatsapp-widget.sock`), not a TCP port — scoped by
-  filesystem permissions to the local user, tighter than "localhost TCP" now
-  that a password check flows over this channel.
+- **Transport:** HTTP + WebSocket server bound to **127.0.0.1 on an ephemeral
+  port, protected by a bearer token**.
+
+  *(Revised 2026-08-18 during planning. The original design specified a Unix
+  domain socket. Verified constraint: Plasma 6 QML can only reach the backend
+  via `XMLHttpRequest` and the `QtWebSockets` `WebSocket` type — both of which
+  speak TCP only, with no QML binding for `QLocalSocket`. A Unix socket would
+  have required shelling out to `curl --unix-socket` per request, which defeats
+  the low-overhead goal. Loopback TCP is therefore required.)*
+
+  To compensate for loopback TCP being reachable by any local process, the
+  backend generates a random 32-byte token at startup and writes
+  `{port, token}` to `$XDG_RUNTIME_DIR/whatsapp-widget-endpoint.json` with
+  mode `0600`. Every HTTP request and the WebSocket handshake must present
+  `Authorization: Bearer <token>`. Requests from a non-loopback address are
+  rejected outright.
+- **Version pin: `baileys@6.7.24`.** The `latest` dist-tag currently points at
+  `7.0.0-rc14`, a release candidate that pulls in a `whatsapp-rust-bridge`
+  native dependency; `6.7.24` is the stable line (tagged `legacy`). Pin
+  exactly — a background service should not track an RC.
 - **Session persistence:** Baileys `useMultiFileAuthState`, stored under
   `~/.local/share/whatsapp-widget/session/` (gitignored, never committed).
+- **Own message store required.** Verified: Baileys 6.7.24 no longer exports
+  `makeInMemoryStore` (removed upstream). The backend therefore keeps its own
+  small in-memory store fed by Baileys events, bounded to the most recent 50
+  messages per chat and 200 chats, so idle memory stays flat instead of
+  growing with history.
 - **API surface (over the socket):**
   - `GET /status` — connection state: `disconnected | needs-pairing | connected`
   - `GET /qr` — current pairing QR as PNG, while `needs-pairing`
@@ -70,11 +91,32 @@ the reverse-engineered protocol code isolated, independently testable via
   - `POST /chats/:id/messages` — send a message
   - `WS /events` — push stream: new message, unread count changes, connection
     state changes (this is what lets the Plasmoid avoid polling)
-  - `POST /unlock` — body: `{ password }`. Verifies against the local Unix
-    account via PAM (`authenticate-pam` or equivalent native binding, backed
-    by the system's `unix_chkpwd` helper — the same primitive KDE's own lock
-    screen uses). Returns success/failure only; password is never logged or
-    persisted.
+  - `POST /unlock` — body: `{ password }`. Verifies the user's real login
+    password via PAM using the `authenticate-pam` native binding (confirmed
+    to compile on this system; backed by the setuid `unix_chkpwd` helper,
+    which is what allows an unprivileged process to verify its own user's
+    password). Returns success/failure only; the password is never logged,
+    persisted, or echoed back.
+
+  **PAM service: a dedicated `whatsapp-widget` service, not an existing one.**
+  Verified on this system:
+  - `/etc/pam.d/kscreenlocker` is unusable — it delegates auth solely to
+    Howdy (`pam_python.so /usr/lib/security/howdy/pam.py`) and that script is
+    missing, with no password fallback line.
+  - Every general-purpose service (`login` → `system-local-login` →
+    `system-auth`) runs `pam_faillock`, and there is no `/etc/faillock.conf`,
+    so defaults apply: **3 failures locks the real user account for 10
+    minutes.** Routing a chat widget's privacy prompt through those services
+    would let three mistyped entries lock the user out of their own laptop.
+
+  Therefore setup installs `/etc/pam.d/whatsapp-widget` (one-time `sudo`)
+  containing only `pam_unix` for auth/account, with no `pam_faillock`. Failed
+  widget unlocks then cannot affect system login. Brute-force protection is
+  not lost — it moves into the backend as exponential backoff (see below).
+
+- **Unlock throttling:** the backend tracks consecutive failures and blocks
+  further attempts for `min(2^failures × 1000ms, 30s)`. This replaces the
+  `pam_faillock` protection given up above, without touching system state.
 - **Autostart:** launched as a systemd `--user` service (or Plasma autostart
   desktop file) so it's running before the widget loads; the Plasmoid also
   attempts to start it if the socket isn't present.
@@ -123,8 +165,10 @@ the reverse-engineered protocol code isolated, independently testable via
 - Blur effect computed once per hide-toggle, not per-frame.
 - No `setInterval`-driven countdown for the unlock timer — elapsed time
   checked lazily on demand.
-- Unix domain socket avoids any network-stack overhead a TCP loopback socket
-  would add.
+- Message store bounded (50 messages × 200 chats) so memory does not grow
+  with chat history.
+- Loopback TCP was forced by the QML constraint above; its overhead is
+  negligible next to the avoided Chromium process.
 
 ## Error handling & edge cases
 
@@ -142,12 +186,18 @@ whatsapp-widget/
   backend/
     package.json
     src/
-      index.js          entrypoint: starts Baileys client + socket server
+      index.js           entrypoint: wires client + store + server
+      config.js          XDG paths, PAM service name, store bounds
       whatsapp.js        Baileys client wrapper (connect, events, send)
-      server.js          HTTP+WS server over the Unix domain socket
-      auth-pam.js        PAM password verification for /unlock
+      store.js           bounded in-memory chat/message store
+      server.js          HTTP+WS server, loopback TCP + bearer token
+      auth-pam.js        PAM password verification + backoff for /unlock
+    test/                node:test unit tests
     systemd/
       whatsapp-widget-backend.service
+  packaging/
+    pam/whatsapp-widget  PAM service file installed to /etc/pam.d/
+    install-pam.sh       one-time sudo installer for the above
   plasmoid/
     metadata.json
     contents/
@@ -166,11 +216,15 @@ whatsapp-widget/
 
 ## Testing strategy
 
-- Backend endpoints exercised directly (`curl --unix-socket`, `websocat`)
-  before any QML is wired up, so the fragile WhatsApp-protocol layer is
-  validated in isolation.
-- Plasmoid iterated via `plasmoidviewer` for fast reload without installing
-  into the full Plasma shell each time.
+- Unit tests run on Node's built-in `node:test` runner — no extra test
+  dependency, consistent with the lightweight goal.
+- Backend endpoints exercised directly with `curl -H "Authorization: Bearer
+  <token>"` before any QML is wired up, so the fragile WhatsApp-protocol
+  layer is validated in isolation.
+- Plasmoid iterated via `plasmoidviewer` for fast reload without restarting
+  the shell. Note: `plasmoidviewer` is **not currently installed** — it ships
+  in the `plasma-sdk` package and setup installs it. `kpackagetool6` (needed
+  to install the widget) is already present.
 - Manual verification of the hide/reveal + PAM prompt flow, since PAM
   interaction isn't practical to fully automate.
 
