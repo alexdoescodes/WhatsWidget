@@ -16,36 +16,47 @@ function readPassword(prompt) {
       reject(new Error('check-pam must be run from an interactive terminal'));
       return;
     }
+
+    const KEY_CTRL_C = 3;
+    const KEY_CTRL_D = 4;
+    const KEY_BACKSPACE = 8;
+    const KEY_LF = 10;
+    const KEY_CR = 13;
+    const KEY_DEL = 127;
+
     process.stdout.write(prompt);
     stdin.setRawMode(true);
     stdin.resume();
     stdin.setEncoding('utf8');
 
     let value = '';
-    const onData = (char) => {
-      switch (char) {
-        case '\n':
-        case '\r':
-        case '':
-          stdin.setRawMode(false);
-          stdin.pause();
-          stdin.removeListener('data', onData);
-          process.stdout.write('\n');
+
+    const finish = () => {
+      stdin.setRawMode(false);
+      stdin.pause();
+      stdin.removeListener('data', onData);
+      process.stdout.write('\n');
+    };
+
+    const onData = (chunk) => {
+      for (const char of chunk) {
+        const code = char.charCodeAt(0);
+
+        if (code === KEY_CR || code === KEY_LF || code === KEY_CTRL_D) {
+          finish();
           resolve(value);
-          break;
-        case '':
-          stdin.setRawMode(false);
-          stdin.pause();
-          stdin.removeListener('data', onData);
-          process.stdout.write('\n');
+          return;
+        }
+        if (code === KEY_CTRL_C) {
+          finish();
           reject(new Error('cancelled'));
-          break;
-        case '':
-        case '\b':
+          return;
+        }
+        if (code === KEY_DEL || code === KEY_BACKSPACE) {
           value = value.slice(0, -1);
-          break;
-        default:
-          value += char;
+          continue;
+        }
+        value += char;
       }
     };
 
