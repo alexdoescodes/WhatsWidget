@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# SDD working directory (task briefs, reports, review diffs) — build scratch
+.superpowers/
+
+# ---------------------------------------------------------------------------
+# Credential safety net.
+#
+# By default NONE of these live inside the repo: the WhatsApp session is at
+# ~/.local/share/whatsapp-widget/session and the bearer-token endpoint file at
+# $XDG_RUNTIME_DIR/whatsapp-widget-endpoint.json. These patterns exist so that
+# a changed XDG_DATA_HOME, a local test run, or a future refactor that relocates
+# state into the tree cannot silently publish credentials.
+#
+# The WhatsApp session directory is a full account credential — anyone holding
+# it can read and send your messages. Never commit it.
+# ---------------------------------------------------------------------------
+session/
+**/whatsapp-widget/session/
+*whatsapp-widget-endpoint.json
+creds.json
+app-state-sync-*.json
+pre-key-*.json
+sender-key-*.json
+session-*.json
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+.DS_Store
