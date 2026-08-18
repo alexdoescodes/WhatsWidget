@@ -1,0 +1,17 @@
+{
+  "name": "whatsapp-widget-backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "authenticate-pam": "1.0.5",
+    "baileys": "6.7.24",
+    "qrcode": "1.5.4",
+    "ws": "8.21.3"
+  }
+}
