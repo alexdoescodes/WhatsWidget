@@ -1,0 +1,14 @@
+{
+  "KPlugin": {
+    "Id": "org.kde.plasma.whatsappwidget",
+    "Name": "WhatsApp Widget",
+    "Description": "Mini WhatsApp chat panel with a privacy hide mode",
+    "Icon": "internet-mail",
+    "License": "MIT",
+    "Version": "1.0.0",
+    "Authors": [{ "Name": "Alex" }],
+    "ServiceTypes": ["Plasma/Applet"]
+  },
+  "KPackageStructure": "Plasma/Applet",
+  "X-Plasma-API-Minimum-Version": "6.0"
+}
