@@ -1,5 +1,6 @@
 import QtQuick
 import org.kde.kirigami as Kirigami
+import org.kde.plasma.components as PlasmaComponents
 
 MouseArea {
     id: compact
@@ -27,6 +28,28 @@ MouseArea {
             case "needs-pairing": return Kirigami.Theme.neutralTextColor;
             default: return Kirigami.Theme.negativeTextColor;
             }
+        }
+    }
+
+    // Unread badge. Task 13 adds the suppression clause that hides it while
+    // the widget is in privacy mode; the property it needs does not exist yet.
+    Rectangle {
+        id: badge
+
+        visible: root.backend.unread > 0
+        anchors.top: parent.top
+        anchors.right: parent.right
+        width: Math.max(badgeLabel.implicitWidth + Kirigami.Units.smallSpacing, height)
+        height: Math.round(parent.height * 0.45)
+        radius: height / 2
+        color: Kirigami.Theme.highlightColor
+
+        PlasmaComponents.Label {
+            id: badgeLabel
+            anchors.centerIn: parent
+            text: root.backend.unread > 99 ? "99+" : String(root.backend.unread)
+            color: Kirigami.Theme.highlightedTextColor
+            font.pixelSize: Math.round(badge.height * 0.7)
         }
     }
 
