@@ -31,12 +31,12 @@ MouseArea {
         }
     }
 
-    // Unread badge. Task 13 adds the suppression clause that hides it while
-    // the widget is in privacy mode; the property it needs does not exist yet.
+    // Unread badge. Suppressed while the widget is hidden — a count visible
+    // on the panel would defeat the point of censoring it.
     Rectangle {
         id: badge
 
-        visible: root.backend.unread > 0
+        visible: root.backend.unread > 0 && !root.hidden
         anchors.top: parent.top
         anchors.right: parent.right
         width: Math.max(badgeLabel.implicitWidth + Kirigami.Units.smallSpacing, height)

@@ -54,12 +54,13 @@ ColumnLayout {
     }
 
     function refreshQr() {
-        var endpoint = pairing.backend.endpoint;
-        if (!endpoint) {
-            qrImage.source = "";
-            return;
-        }
-
+        // Abort any in-flight request unconditionally, before the endpoint
+        // check below can return early. Checking first and aborting after
+        // used to leave a request dangling when `endpoint` went null while
+        // one was in flight: this function would bail out without touching
+        // `pendingRequest`, so the stale response would later win the
+        // `pendingRequest !== xhr` check in the handler and repaint a QR for
+        // a backend that is no longer there.
         if (pairing.pendingRequest) {
             // Drop the reference first: abort() runs the handler below
             // synchronously, and it must recognise itself as superseded
@@ -67,6 +68,12 @@ ColumnLayout {
             var stalled = pairing.pendingRequest;
             pairing.pendingRequest = null;
             stalled.abort();
+        }
+
+        var endpoint = pairing.backend.endpoint;
+        if (!endpoint) {
+            qrImage.source = "";
+            return;
         }
 
         var xhr = new XMLHttpRequest();

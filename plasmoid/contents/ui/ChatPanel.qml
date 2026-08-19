@@ -45,11 +45,6 @@ ColumnLayout {
     function closeChat() {
         panel.activeJid = "";
         messageModel.clear();
-        // markRead() refreshes the *total* unread count only; the per-chat
-        // counts inside `chats` still hold their pre-read value, so the list
-        // we are going back to would show a badge on a chat that was just
-        // read. Re-fetch it once, on the transition, rather than on a timer.
-        panel.backend.refreshChats();
     }
 
     function sendComposed() {

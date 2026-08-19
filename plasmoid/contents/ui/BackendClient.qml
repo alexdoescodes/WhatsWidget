@@ -222,6 +222,11 @@ QtObject {
             // and fetch. Acting on a failed write would only mislead.
             if (err) return;
             client.refreshStatus();
+            // refreshStatus() only refreshes the *total* unread count; the
+            // per-chat counts inside `chats` still hold their pre-read value
+            // without this, so the chat list would keep showing a badge on a
+            // chat that was just read.
+            client.refreshChats();
         });
     }
 
