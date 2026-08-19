@@ -1,0 +1,16 @@
+[Unit]
+Description=WhatsApp widget backend
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/env node %h/Documents/whatsapp-widget/backend/src/index.js
+Restart=on-failure
+RestartSec=5
+# The backend holds a WhatsApp session and verifies passwords; keep its
+# footprint and privileges small.
+NoNewPrivileges=false
+MemoryMax=400M
+
+[Install]
+WantedBy=default.target
