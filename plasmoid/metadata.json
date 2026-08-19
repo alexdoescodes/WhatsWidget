@@ -4,6 +4,7 @@
     "Name": "WhatsApp Widget",
     "Description": "Mini WhatsApp chat panel with a privacy hide mode",
     "Icon": "internet-mail",
+    "Category": "Online Services",
     "License": "MIT",
     "Version": "1.0.0",
     "Authors": [{ "Name": "Alex" }]
