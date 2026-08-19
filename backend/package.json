@@ -4,6 +4,9 @@
   "private": true,
   "type": "commonjs",
   "main": "src/index.js",
+  "engines": {
+    "node": ">=18.2 <23"
+  },
   "scripts": {
     "start": "node src/index.js",
     "test": "node --test test/"
