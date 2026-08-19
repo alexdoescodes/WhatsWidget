@@ -35,6 +35,26 @@ function createServer({ client, store, authenticator, endpointFile }) {
     return supplied.length > 0 && timingSafeEqual(supplied, token);
   }
 
+  /**
+   * Authorization for the WebSocket upgrade handshake ONLY.
+   *
+   * QML's `WebSocket` type cannot set request headers, so the widget has no
+   * way to present a bearer header on the handshake and must pass the token
+   * as a query parameter instead. That concession is deliberately confined
+   * to this one code path: a token in a query string leaks into shell
+   * history, process listings and access logs in ways a header does not, so
+   * every HTTP route keeps using the header-only `authorized()` above.
+   */
+  function authorizedUpgrade(req) {
+    if (!LOOPBACK.has(req.socket.remoteAddress)) return false;
+    const header = req.headers.authorization || '';
+    let supplied = header.startsWith('Bearer ') ? header.slice(7) : '';
+    if (!supplied) {
+      supplied = new URL(req.url, 'http://127.0.0.1').searchParams.get('token') || '';
+    }
+    return supplied.length > 0 && timingSafeEqual(supplied, token);
+  }
+
   function json(res, code, body) {
     const payload = JSON.stringify(body);
     res.writeHead(code, { 'Content-Type': 'application/json' });
@@ -119,7 +139,7 @@ function createServer({ client, store, authenticator, endpointFile }) {
   }
 
   httpServer.on('upgrade', (req, socket, head) => {
-    if (!authorized(req) || new URL(req.url, 'http://127.0.0.1').pathname !== '/events') {
+    if (!authorizedUpgrade(req) || new URL(req.url, 'http://127.0.0.1').pathname !== '/events') {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       return socket.destroy();
     }

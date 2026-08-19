@@ -226,3 +226,36 @@ test('close() resolves even when a connected socket never sends a request', asyn
     socket.destroy();
   }
 });
+
+test('websocket upgrade accepts the token as a query parameter', async () => {
+  const { server } = build();
+  const { token } = await server.listen();
+
+  // QML's WebSocket type cannot set an Authorization header, so the upgrade
+  // handshake must accept the token in the query string.
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/events?token=${encodeURIComponent(token)}`);
+  const outcome = await new Promise((resolve) => {
+    ws.once('open', () => resolve('open'));
+    ws.once('error', () => resolve('error'));
+    ws.once('close', () => resolve('close'));
+  });
+  assert.strictEqual(outcome, 'open');
+
+  await new Promise((resolve) => {
+    ws.once('close', resolve);
+    ws.close();
+  });
+  await server.close();
+});
+
+test('query-parameter auth does not leak onto HTTP routes', async () => {
+  const { server } = build();
+  const { token } = await server.listen();
+
+  // The query-string concession exists solely for the WebSocket handshake.
+  // A valid token in the query string must NOT authorize an HTTP route:
+  // query strings end up in shell history, process listings and access logs.
+  const res = await fetch(`http://127.0.0.1:${server.port}/status?token=${encodeURIComponent(token)}`);
+  assert.strictEqual(res.status, 401);
+  await server.close();
+});

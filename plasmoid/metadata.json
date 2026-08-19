@@ -6,8 +6,7 @@
     "Icon": "internet-mail",
     "License": "MIT",
     "Version": "1.0.0",
-    "Authors": [{ "Name": "Alex" }],
-    "ServiceTypes": ["Plasma/Applet"]
+    "Authors": [{ "Name": "Alex" }]
   },
   "KPackageStructure": "Plasma/Applet",
   "X-Plasma-API-Minimum-Version": "6.0"
