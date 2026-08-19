@@ -152,6 +152,11 @@ function createServer({ client, store, authenticator, endpointFile }) {
         try { fs.unlinkSync(endpointFile); } catch { /* already gone */ }
         for (const socket of wss.clients) socket.terminate();
         httpServer.close(() => resolve());
+        // http.Server#close() stops accepting new connections and will wait
+        // forever for a socket that is open but never sends a request (or
+        // never finishes one) to end on its own before firing its callback.
+        // Force every connection shut so close() always settles.
+        httpServer.closeAllConnections();
       });
     },
     broadcast,

@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const WebSocket = require('ws');
+const net = require('node:net');
 const { createServer } = require('../src/server');
 const { createStore } = require('../src/store');
 
@@ -155,4 +156,73 @@ test('returns 503 when the client fails to send a message', async () => {
   assert.strictEqual(res.status, 503);
   assert.deepStrictEqual(await res.json(), { error: 'boom' });
   await server.close();
+});
+
+test('websocket upgrade rejects a missing token', async () => {
+  const { server } = build();
+  await server.listen();
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/events`);
+  const outcome = await new Promise((resolve) => {
+    ws.once('open', () => resolve('open'));
+    ws.once('error', () => resolve('error'));
+    ws.once('close', () => resolve('close'));
+  });
+  assert.notStrictEqual(outcome, 'open');
+
+  ws.terminate();
+  await server.close();
+});
+
+test('websocket upgrade rejects a wrong token', async () => {
+  const { server } = build();
+  await server.listen();
+
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/events`, {
+    headers: { Authorization: 'Bearer not-the-token' },
+  });
+  const outcome = await new Promise((resolve) => {
+    ws.once('open', () => resolve('open'));
+    ws.once('error', () => resolve('error'));
+    ws.once('close', () => resolve('close'));
+  });
+  assert.notStrictEqual(outcome, 'open');
+
+  ws.terminate();
+  await server.close();
+});
+
+test('close() resolves even when a connected socket never sends a request', async () => {
+  const { server } = build();
+  await server.listen();
+
+  // A raw TCP connection that completes the handshake but never sends any
+  // HTTP bytes. Node's http.Server.close() already reclaims idle keep-alive
+  // sockets left over from a *finished* request/response on its own, but a
+  // connection that never sent a request at all is not "idle keep-alive" in
+  // that sense and http.Server.close() alone waits for it forever — proven
+  // by reproducing the hang against the pre-fix code before writing this
+  // test. Any local process can open a socket like this against a loopback
+  // service, so close() must not be able to hang on it.
+  const socket = net.connect(server.port, '127.0.0.1');
+  try {
+    await new Promise((resolve, reject) => {
+      socket.once('connect', resolve);
+      socket.once('error', reject);
+    });
+
+    const closed = server.close();
+    const timedOut = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('server.close() did not resolve within 2s: an unfinished connection blocked it')), 2000);
+    });
+    // Destroying the socket in `finally` (not here) is what proves the
+    // point: server.close() must resolve on its own, without us having to
+    // end the connection for it.
+    await Promise.race([closed, timedOut]);
+  } finally {
+    // Always tear the raw socket down, pass or fail, so a real regression
+    // fails this test fast instead of leaving a handle open that stalls
+    // the rest of the suite.
+    socket.destroy();
+  }
 });
