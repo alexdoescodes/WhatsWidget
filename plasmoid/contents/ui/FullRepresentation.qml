@@ -31,10 +31,11 @@ Item {
         text: i18n("Connecting…")
     }
 
-    // Chat UI lands here in Task 11.
-    Item {
+    ChatPanel {
         id: chatArea
         anchors.fill: parent
+        anchors.margins: Kirigami.Units.smallSpacing
+        backend: full.backend
         visible: full.backend.status === "connected"
     }
 }
