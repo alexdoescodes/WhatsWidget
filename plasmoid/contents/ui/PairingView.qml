@@ -61,8 +61,12 @@ ColumnLayout {
         }
 
         if (pairing.pendingRequest) {
-            pairing.pendingRequest.abort();
+            // Drop the reference first: abort() runs the handler below
+            // synchronously, and it must recognise itself as superseded
+            // rather than clear a QR that is still perfectly good.
+            var stalled = pairing.pendingRequest;
             pairing.pendingRequest = null;
+            stalled.abort();
         }
 
         var xhr = new XMLHttpRequest();
@@ -72,7 +76,10 @@ ColumnLayout {
         xhr.responseType = "arraybuffer";
         xhr.onreadystatechange = function () {
             if (xhr.readyState !== XMLHttpRequest.DONE) return;
-            if (pairing.pendingRequest === xhr) pairing.pendingRequest = null;
+            // A request that is no longer the pending one was superseded; its
+            // result, or its abort, says nothing about what should be shown.
+            if (pairing.pendingRequest !== xhr) return;
+            pairing.pendingRequest = null;
             if (xhr.status !== 200 || !xhr.response) {
                 // 404 means the backend has no code yet; anything else means it
                 // could not answer. Either way there is nothing to show.
