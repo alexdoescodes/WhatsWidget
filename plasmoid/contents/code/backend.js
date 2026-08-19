@@ -40,6 +40,13 @@ function parseEndpoint(text) {
     }
 }
 
+// True when a request never reached the backend at all, as opposed to being
+// answered and refused. Only the former justifies declaring the backend down:
+// an HTTP error status proves the backend is up and talking.
+function isTransportError(err) {
+    return err === "unreachable" || err === "no backend";
+}
+
 function buildUrl(endpoint, path) {
     return "http://127.0.0.1:" + endpoint.port + path;
 }

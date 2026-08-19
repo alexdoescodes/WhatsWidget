@@ -9,10 +9,9 @@ import "../code/backend.js" as Backend
  * Live client for the loopback backend.
  *
  * Everything it needs — port and bearer token — comes from the 0600 endpoint
- * file the backend writes into $XDG_RUNTIME_DIR. Reads happen exactly twice
- * per connection attempt path: once at startup, and once per one-shot
- * reconnect after the event socket drops. There is no polling anywhere; live
- * updates arrive as pushes over the /events WebSocket.
+ * file the backend writes into $XDG_RUNTIME_DIR. There is no polling: live
+ * updates arrive as pushes over the /events WebSocket, and the endpoint file
+ * is re-read only when a connection attempt has actually failed.
  */
 QtObject {
     id: client
@@ -29,17 +28,65 @@ QtObject {
     readonly property string endpointFile: Backend.endpointPath(
         QtCore.StandardPaths.writableLocation(QtCore.StandardPaths.RuntimeLocation))
 
-    // Guards the deliberate close/reopen inside applyEndpoint() so that the
-    // resulting WebSocket.Closed does not look like a dropped connection and
-    // arm the reconnect timer — that would turn reconnection into a 5s poll.
+    // Reconnect backoff. Every retry forks a `cat` to re-read the endpoint
+    // file, and "backend not running" is the widget's default state until the
+    // user enables the systemd unit — a flat 5s retry would be ~720 process
+    // spawns an hour on battery. Doubles per consecutive failure, capped, and
+    // reset the moment the event socket opens.
+    readonly property int reconnectMinDelay: 5000
+    readonly property int reconnectMaxDelay: 60000
+    property int reconnectDelay: reconnectMinDelay
+
+    // Measured against Qt 6.11: setting `active = false` emits no status
+    // change at all, and the only synchronous transition the reopen produces
+    // is `Connecting`, which onStatusChanged ignores. So this guard is
+    // currently vacuous — it is kept as cheap insurance in case a future Qt
+    // does emit `Closed` synchronously, which would otherwise read as a
+    // dropped connection and turn reconnection into a poll.
     property bool restartingSocket: false
 
     // connectSource() on an already-connected source is a no-op, so a second
     // read while one is still in flight would be silently dropped.
     property bool readingEndpoint: false
 
+    // QML's XMLHttpRequest does not implement timeouts — measured on Qt 6.11:
+    // `xhr.timeout` is settable but never fires and `ontimeout` is not even a
+    // member of the object. A backend that accepts the TCP connection and then
+    // never answers would hang the callback forever, so every in-flight
+    // request carries its own one-shot guard timer instead.
+    readonly property int requestTimeout: 10000
+    readonly property Component requestGuard: Component {
+        Timer { repeat: false }
+    }
+
+    function scheduleReconnect() {
+        // One outage produces several failure signals — the socket closing and
+        // every in-flight request failing with it. The timer is one-shot, so
+        // `running` is true exactly while a retry is already pending; collapse
+        // them all into that one retry instead of advancing the backoff once
+        // per signal (which would make the first retry 10s, not 5s).
+        if (client.reconnectTimer.running) return;
+        client.reconnectTimer.interval = client.reconnectDelay;
+        client.reconnectTimer.restart();
+        client.reconnectDelay = Math.min(client.reconnectDelay * 2, client.reconnectMaxDelay);
+    }
+
+    function markDisconnected() {
+        // Nothing known about the backend is trustworthy any more. Leaving
+        // `unread`/`chats` behind would render a stale badge and a stale chat
+        // list against a backend that is gone.
+        client.status = "disconnected";
+        client.unread = 0;
+        client.chats = [];
+    }
+
     function loadEndpoint() {
-        if (readingEndpoint || endpointFile === "") return;
+        if (readingEndpoint || endpointFile === "") {
+            // Nothing was started, so nothing will call back. Without this the
+            // widget would hang silently and never retry again.
+            scheduleReconnect();
+            return;
+        }
         readingEndpoint = true;
         endpointReader.connectSource(Backend.readCommand(endpointFile));
     }
@@ -48,8 +95,8 @@ QtObject {
         if (!next) {
             // No readable endpoint file: the backend is down or not up yet.
             client.endpoint = null;
-            client.status = "disconnected";
-            client.reconnectTimer.restart();
+            markDisconnected();
+            scheduleReconnect();
             return;
         }
 
@@ -67,13 +114,36 @@ QtObject {
         refreshChats();
     }
 
-    // callback(errorOrNull, parsedBodyOrNull)
+    // callback(errorOrNull, parsedBodyOrNull). `error` is an HTTP status code
+    // for a reachable backend that refused the request, or the string
+    // "unreachable"/"no backend" when the request never got an answer.
     function request(method, path, body, callback) {
         if (!endpoint) {
             if (callback) callback("no backend", null);
             return;
         }
+
         var xhr = new XMLHttpRequest();
+        var guard = client.requestGuard.createObject(client, { interval: client.requestTimeout });
+        var settled = false;
+
+        function finish(err, data) {
+            if (settled) return;
+            settled = true;
+            if (guard) {
+                guard.stop();
+                guard.destroy();
+                guard = null;
+            }
+            if (callback) callback(err, data);
+        }
+
+        guard.triggered.connect(function () {
+            // Connection accepted but no answer: give up rather than hang.
+            xhr.abort();
+            finish("unreachable", null);
+        });
+
         xhr.open(method, Backend.buildUrl(endpoint, path));
         xhr.setRequestHeader("Authorization", "Bearer " + endpoint.token);
         if (body) xhr.setRequestHeader("Content-Type", "application/json");
@@ -88,21 +158,29 @@ QtObject {
                 }
             }
             if (xhr.status >= 200 && xhr.status < 300) {
-                if (callback) callback(null, parsed);
-            } else if (callback) {
+                finish(null, parsed);
+            } else {
                 // status 0 means the request never reached the backend.
-                callback(xhr.status || "unreachable", parsed);
+                finish(xhr.status || "unreachable", parsed);
             }
         };
+        guard.start();
         xhr.send(body ? JSON.stringify(body) : null);
     }
 
     function refreshStatus() {
         request("GET", "/status", null, function (err, data) {
-            if (err || !data) {
-                client.status = "disconnected";
+            if (Backend.isTransportError(err)) {
+                // The backend is unreachable. Arm a retry as well: the event
+                // socket may still look Open, in which case nothing else would
+                // ever re-query and the dot would stay red forever.
+                client.markDisconnected();
+                client.scheduleReconnect();
                 return;
             }
+            // An HTTP error status means the backend answered — it is up. Do
+            // not claim "disconnected" on the strength of one refused request.
+            if (err || !data) return;
             client.status = data.status;
             client.unread = data.unread;
         });
@@ -125,8 +203,11 @@ QtObject {
     }
 
     function markRead(jid) {
-        request("POST", "/chats/" + encodeURIComponent(jid) + "/read", {}, function () {
-            refreshStatus();
+        request("POST", "/chats/" + encodeURIComponent(jid) + "/read", {}, function (err) {
+            // The mark did not happen, so there is no new unread count to go
+            // and fetch. Acting on a failed write would only mislead.
+            if (err) return;
+            client.refreshStatus();
         });
     }
 
@@ -177,22 +258,24 @@ QtObject {
         onStatusChanged: {
             if (client.socket.status === WebSocket.Open) {
                 client.reconnectTimer.stop();
+                client.reconnectDelay = client.reconnectMinDelay;
                 return;
             }
             if (client.restartingSocket) return;
             if (client.socket.status === WebSocket.Error || client.socket.status === WebSocket.Closed) {
                 // The backend is gone: stop reporting the last known good
                 // state, or a dead backend keeps rendering a green dot.
-                client.status = "disconnected";
+                client.markDisconnected();
                 // One-shot retry on failure only. This is not a poll: it is
-                // armed by a drop and stopped again the moment we reconnect.
-                client.reconnectTimer.restart();
+                // armed by a drop, backs off, and is stopped again the moment
+                // we reconnect.
+                client.scheduleReconnect();
             }
         }
     }
 
     property Timer reconnectTimer: Timer {
-        interval: 5000
+        interval: client.reconnectMinDelay
         repeat: false
         onTriggered: client.loadEndpoint()
     }

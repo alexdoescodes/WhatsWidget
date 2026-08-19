@@ -259,3 +259,22 @@ test('query-parameter auth does not leak onto HTTP routes', async () => {
   assert.strictEqual(res.status, 401);
   await server.close();
 });
+
+test('websocket upgrade rejects a wrong token in the query parameter', async () => {
+  const { server } = build();
+  await server.listen();
+
+  // The query-parameter path is the auth boundary for the widget; a refactor
+  // that collapsed authorizedUpgrade into an unconditional accept must fail
+  // here rather than only in the two positive tests above.
+  const ws = new WebSocket(`ws://127.0.0.1:${server.port}/events?token=not-the-token`);
+  const outcome = await new Promise((resolve) => {
+    ws.once('open', () => resolve('open'));
+    ws.once('error', () => resolve('error'));
+    ws.once('close', () => resolve('close'));
+  });
+  assert.notStrictEqual(outcome, 'open');
+
+  ws.terminate();
+  await server.close();
+});
