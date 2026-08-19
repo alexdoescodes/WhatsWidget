@@ -227,7 +227,10 @@ test('close() resolves even when a connected socket never sends a request', asyn
   }
 });
 
-test('websocket upgrade accepts the token as a query parameter', async () => {
+// Node's default test timeout is infinite, so a server that accepts the
+// upgrade and then goes silent would hang the whole suite instead of failing
+// this test. Bound it.
+test('websocket upgrade accepts the token as a query parameter', { timeout: 5000 }, async () => {
   const { server } = build();
   const { token } = await server.listen();
 

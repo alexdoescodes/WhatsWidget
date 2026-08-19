@@ -78,6 +78,9 @@ QtObject {
         client.status = "disconnected";
         client.unread = 0;
         client.chats = [];
+        // This connection is no longer a candidate for proving itself, so it
+        // must not go on to reset the backoff behind our back.
+        client.stabilityTimer.stop();
     }
 
     function loadEndpoint() {
@@ -124,7 +127,7 @@ QtObject {
         }
 
         var xhr = new XMLHttpRequest();
-        var guard = client.requestGuard.createObject(client, { interval: client.requestTimeout });
+        var guard = null;
         var settled = false;
 
         function finish(err, data) {
@@ -137,12 +140,6 @@ QtObject {
             }
             if (callback) callback(err, data);
         }
-
-        guard.triggered.connect(function () {
-            // Connection accepted but no answer: give up rather than hang.
-            xhr.abort();
-            finish("unreachable", null);
-        });
 
         xhr.open(method, Backend.buildUrl(endpoint, path));
         xhr.setRequestHeader("Authorization", "Bearer " + endpoint.token);
@@ -164,6 +161,15 @@ QtObject {
                 finish(xhr.status || "unreachable", parsed);
             }
         };
+        // Created last, once nothing above can still throw: a guard built
+        // before xhr.open()/setRequestHeader() would be orphaned by a throw —
+        // never started, never destroyed, and the callback never fired.
+        guard = client.requestGuard.createObject(client, { interval: client.requestTimeout });
+        guard.triggered.connect(function () {
+            // Connection accepted but no answer: give up rather than hang.
+            xhr.abort();
+            finish("unreachable", null);
+        });
         guard.start();
         xhr.send(body ? JSON.stringify(body) : null);
     }
@@ -188,6 +194,14 @@ QtObject {
 
     function refreshChats() {
         request("GET", "/chats", null, function (err, data) {
+            if (Backend.isTransportError(err)) {
+                // The `message` event path calls this on its own, so without
+                // this branch a transport failure there would leave `chats`
+                // stale with no retry armed.
+                client.markDisconnected();
+                client.scheduleReconnect();
+                return;
+            }
             if (!err && data) client.chats = data.chats;
         });
     }
@@ -258,7 +272,12 @@ QtObject {
         onStatusChanged: {
             if (client.socket.status === WebSocket.Open) {
                 client.reconnectTimer.stop();
-                client.reconnectDelay = client.reconnectMinDelay;
+                // Deliberately NOT resetting the backoff here. A backend that
+                // upgrades the socket and then drops it immediately would
+                // otherwise pin the ladder at 5s forever — the exact flat
+                // retry the backoff exists to prevent, in the state where it
+                // costs most. The reset waits for stabilityTimer.
+                client.stabilityTimer.restart();
                 return;
             }
             if (client.restartingSocket) return;
@@ -278,6 +297,21 @@ QtObject {
         interval: client.reconnectMinDelay
         repeat: false
         onTriggered: client.loadEndpoint()
+    }
+
+    // Resets the backoff once a connection has proven itself by staying Open
+    // for a full reconnectMinDelay. Armed on Open, stopped on any close, so a
+    // flapping backend never reaches the reset and keeps climbing the ladder,
+    // while a genuinely healthy connection is back to a 5s retry within five
+    // seconds of connecting and cannot be left pinned at the 60s cap.
+    //
+    // Time, not a successful /status, is the test on purpose: the crash-loop
+    // this guards against accepts the WebSocket upgrade, so it is serving HTTP
+    // too and would answer /status happily on every iteration of the loop.
+    property Timer stabilityTimer: Timer {
+        interval: client.reconnectMinDelay
+        repeat: false
+        onTriggered: client.reconnectDelay = client.reconnectMinDelay
     }
 
     Component.onCompleted: loadEndpoint()
