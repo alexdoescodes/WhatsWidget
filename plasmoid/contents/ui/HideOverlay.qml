@@ -80,6 +80,10 @@ Item {
             overlay.reset();
             return;
         }
+        // A prompt always opens empty. Without this, a reply that landed after
+        // the popup was closed would leave its error message sitting on the
+        // next hide, describing an attempt from a session that is over.
+        overlay.reset();
         // Synchronous: the handler re-evaluates passwordRequired before the
         // focus decision below reads it.
         overlay.shown();
@@ -157,6 +161,17 @@ Item {
                 placeholderText: i18nc("@info:placeholder", "Password")
                 enabled: !overlay.busy
                 onAccepted: overlay.submit(text)
+            }
+
+            PlasmaComponents.BusyIndicator {
+                Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                // PAM's own failure delay makes a rejected attempt take a
+                // couple of seconds; a greyed-out field alone reads as a
+                // freeze. Runs only while a check is actually in flight —
+                // there is nothing animating when the widget is idle.
+                visible: overlay.busy
+                running: overlay.busy
             }
 
             PlasmaComponents.Button {
