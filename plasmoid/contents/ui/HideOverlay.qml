@@ -66,6 +66,23 @@ Item {
         if (overlay.visible && overlay.passwordRequired) passwordField.forceActiveFocus();
     }
 
+    /**
+     * Puts keyboard focus on whichever control is currently live, and in doing
+     * so pulls it off whatever had it underneath — the composer, typically —
+     * so keystrokes cannot reach the censored panel.
+     *
+     * Called on show, and again whenever the gate is re-evaluated: the prompt
+     * can replace the Reveal button while the overlay is already on screen
+     * (the threshold elapsing under an open popup), and `visible` does not
+     * change on that transition, so nothing else would move focus and the
+     * user's first keystrokes would go to a button they can no longer see.
+     */
+    function focusPrompt() {
+        if (!overlay.visible) return;
+        if (overlay.passwordRequired) passwordField.forceActiveFocus();
+        else revealButton.forceActiveFocus();
+    }
+
     // Drops any typed password and clears transient state.
     function reset() {
         passwordField.text = "";
@@ -87,10 +104,7 @@ Item {
         // Synchronous: the handler re-evaluates passwordRequired before the
         // focus decision below reads it.
         overlay.shown();
-        // Pull focus off whatever had it underneath — the composer, typically —
-        // so keystrokes cannot reach the censored panel while it is hidden.
-        if (overlay.passwordRequired) passwordField.forceActiveFocus();
-        else revealButton.forceActiveFocus();
+        overlay.focusPrompt();
     }
 
     Rectangle {

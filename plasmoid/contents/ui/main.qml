@@ -14,8 +14,34 @@ PlasmoidItem {
     // while hidden and not while visible.
     property bool hidden: false
     property double hiddenSince: 0
+    // The threshold in force at the moment hide() ran. passwordRequired() uses
+    // the stricter of this and the live setting, so reconfiguring can tighten
+    // an in-progress hide but never loosen one.
+    //
+    // Without this the gate opens with no password at all: the config page is
+    // reachable from Plasma's applet context menu, which the widget does not
+    // own and cannot gate, so an onlooker at an unlocked desktop could raise
+    // "require password after hidden for" to 1440 and turn a live password
+    // prompt straight back into a free Reveal button.
+    property int hiddenThreshold: 0
+
+    /**
+     * The configured threshold in minutes, or -1 when it cannot be trusted.
+     * Missing, non-numeric, NaN and negative all read as untrustworthy —
+     * note that `undefined * 60000` is NaN and `x >= NaN` is false, so a
+     * config read that returns nothing would otherwise fail open.
+     */
+    function configuredMinutes() {
+        const minutes = Plasmoid.configuration.lockAfterMinutes;
+        if (typeof minutes !== "number" || !isFinite(minutes) || minutes < 0) return -1;
+        return minutes;
+    }
 
     function hide() {
+        // An untrustworthy reading snapshots as 0 — always require the
+        // password — because it must never be able to widen a hide.
+        const snapshot = root.configuredMinutes();
+        root.hiddenThreshold = snapshot < 0 ? 0 : snapshot;
         root.hiddenSince = Date.now();
         root.hidden = true;
     }
@@ -34,8 +60,12 @@ PlasmoidItem {
         if (!root.hidden) return false;
         if (!(root.hiddenSince > 0)) return true;
 
-        const minutes = Plasmoid.configuration.lockAfterMinutes;
-        if (typeof minutes !== "number" || !isFinite(minutes) || minutes < 0) return true;
+        const live = root.configuredMinutes();
+        if (live < 0) return true;
+
+        // The stricter of the snapshot and the live setting: a threshold
+        // raised after the fact cannot extend the free-reveal window.
+        const minutes = Math.min(root.hiddenThreshold, live);
 
         const elapsedMs = Date.now() - root.hiddenSince;
         if (!(elapsedMs >= 0)) return true;
@@ -66,6 +96,9 @@ PlasmoidItem {
     function clearHidden() {
         root.hidden = false;
         root.hiddenSince = 0;
+        // Back to the strictest default, so a stale snapshot can never be the
+        // value in force if `hidden` is ever set without going through hide().
+        root.hiddenThreshold = 0;
     }
 
     preferredRepresentation: compactRepresentation

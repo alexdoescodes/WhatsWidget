@@ -80,6 +80,10 @@ Item {
     // report whatever the gate happened to say the last time it evaluated.
     function refreshGate() {
         hideOverlay.passwordRequired = root.passwordRequired();
+        // The gate may have just swapped the Reveal button for the password
+        // field under an overlay that is already on screen, which moves no
+        // focus by itself.
+        hideOverlay.focusPrompt();
     }
 
     // A popup that closes and reopens does not necessarily toggle the
