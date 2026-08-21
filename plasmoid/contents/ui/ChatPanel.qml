@@ -227,6 +227,12 @@ ColumnLayout {
         messageModel.clear();
     }
 
+    // Drives the composer from outside the UI, so the send/echo behaviour can
+    // be exercised without synthesising key events.
+    function setComposerText(text) {
+        composer.text = text;
+    }
+
     /** Whether a message is already on screen, by id. */
     function hasMessage(id) {
         if (!id) return false;
