@@ -152,10 +152,7 @@ function createWhatsAppClient({
       // chats that predate this backend -- WhatsApp's servers hold no history,
       // so nothing can be fetched from them after the fact.
       sock.ev.on('messaging-history.set', ({ chats = [], contacts = [], messages = [] }) => {
-        for (const contact of contacts) {
-          const name = contactName(contact);
-          if (contact.id && name) store.upsertChat(contact.id, { name });
-        }
+        for (const contact of contacts) rememberContact(contact);
 
         for (const chat of chats) {
           if (!chat.id) continue;
@@ -202,19 +199,41 @@ function createWhatsAppClient({
       sock.ev.on('chats.upsert', applyChats);
       sock.ev.on('chats.update', applyChats);
 
-      sock.ev.on('contacts.upsert', (list) => {
+      const applyContacts = (list) => {
         let changed = false;
-        for (const contact of list) {
-          const name = contactName(contact);
-          if (!contact.id || !name) continue;
-          store.upsertChat(contact.id, { name });
-          changed = true;
-        }
+        for (const contact of list) changed = rememberContact(contact) || changed;
         if (changed) events.emit('chats');
-      });
+      };
+      sock.ev.on('contacts.upsert', applyContacts);
+      sock.ev.on('contacts.update', applyContacts);
     } finally {
       starting = false;
     }
+  }
+
+  /**
+   * Files a contact's display name under every address form it carries.
+   *
+   * WhatsApp addresses the same person two ways -- a phone-number JID
+   * (@s.whatsapp.net) and an anonymised LID (@lid) -- and a conversation may
+   * be keyed by either. A name recorded under only one of them leaves the
+   * chat showing a raw address, which is most of what an unnamed chat list
+   * actually is.
+   *
+   * Names are never used to create chats. The address book is far larger than
+   * the set of people you have talked to, and folding it into the chat list
+   * would bury the real conversations.
+   */
+  function rememberContact(contact) {
+    const name = contactName(contact);
+    if (!name) return false;
+    let recorded = false;
+    for (const id of [contact.id, contact.jid, contact.lid]) {
+      if (!id) continue;
+      store.recordContactName(id, name);
+      recorded = true;
+    }
+    return recorded;
   }
 
   /**

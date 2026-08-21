@@ -125,3 +125,66 @@ test('a brand new chat is not evicted by its own zero timestamp', () => {
   const jids = store.listChats().map((c) => c.jid);
   assert.deepStrictEqual(jids, ['new@s.whatsapp.net']);
 });
+
+test('history sync order does not decide the preview', () => {
+  // messaging-history.set delivers newest first.
+  const store = createStore();
+  store.addMessage('a@s.whatsapp.net', { id: '3', fromMe: false, text: 'july', timestamp: 300 });
+  store.addMessage('a@s.whatsapp.net', { id: '2', fromMe: false, text: 'june', timestamp: 200 });
+  store.addMessage('a@s.whatsapp.net', { id: '1', fromMe: false, text: 'may', timestamp: 100 });
+
+  assert.deepStrictEqual(store.getMessages('a@s.whatsapp.net').map((m) => m.timestamp),
+    [100, 200, 300], 'messages must be held oldest-last regardless of arrival order');
+  assert.strictEqual(store.listChats()[0].lastMessageText, 'july');
+});
+
+test('the message cap discards the oldest, not the newest, out of order', () => {
+  const store = createStore({ maxMessagesPerChat: 2 });
+  store.addMessage('a@s.whatsapp.net', { id: '3', fromMe: false, text: 'newest', timestamp: 300 });
+  store.addMessage('a@s.whatsapp.net', { id: '1', fromMe: false, text: 'oldest', timestamp: 100 });
+  store.addMessage('a@s.whatsapp.net', { id: '2', fromMe: false, text: 'middle', timestamp: 200 });
+
+  assert.deepStrictEqual(store.getMessages('a@s.whatsapp.net').map((m) => m.text),
+    ['middle', 'newest']);
+});
+
+test('a message already held is not stored twice', () => {
+  // After a re-pair the same message can arrive as history and again live.
+  const store = createStore();
+  const msg = { id: 'dup', fromMe: false, text: 'hi', timestamp: 10 };
+  store.addMessage('a@s.whatsapp.net', msg, { incrementUnread: true });
+  store.addMessage('a@s.whatsapp.net', { ...msg }, { incrementUnread: true });
+
+  assert.strictEqual(store.getMessages('a@s.whatsapp.net').length, 1);
+  assert.strictEqual(store.totalUnread(), 1, 'a duplicate must not inflate the badge');
+});
+
+test('a contact name reaches a chat that arrived before it', () => {
+  const store = createStore();
+  store.addMessage('a@s.whatsapp.net', { id: '1', fromMe: false, text: 'hi', timestamp: 1 });
+  assert.strictEqual(store.listChats()[0].name, 'a@s.whatsapp.net');
+
+  store.recordContactName('a@s.whatsapp.net', 'Laura');
+  assert.strictEqual(store.listChats()[0].name, 'Laura');
+});
+
+test('a contact name is used by a chat that arrives after it', () => {
+  const store = createStore();
+  store.recordContactName('a@s.whatsapp.net', 'Laura');
+  store.addMessage('a@s.whatsapp.net', { id: '1', fromMe: false, text: 'hi', timestamp: 1 });
+  assert.strictEqual(store.listChats()[0].name, 'Laura');
+});
+
+test('recording a contact name does not create a chat', () => {
+  const store = createStore();
+  store.recordContactName('nobody@s.whatsapp.net', 'Someone');
+  assert.strictEqual(store.listChats().length, 0,
+    'the address book must not become the chat list');
+});
+
+test('a contact name never overwrites a real chat title', () => {
+  const store = createStore();
+  store.upsertChat('g@g.us', { name: 'Study Group' });
+  store.recordContactName('g@g.us', 'Someone Else');
+  assert.strictEqual(store.listChats()[0].name, 'Study Group');
+});

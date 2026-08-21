@@ -14,6 +14,22 @@
  */
 function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
   const chats = new Map();
+  // Display names learned from the contact list, keyed by every id form a
+  // contact can carry (WhatsApp addresses the same person as @s.whatsapp.net
+  // in one place and @lid in another). Kept apart from `chats` on purpose:
+  // knowing someone's name is not the same as having a conversation with
+  // them, and folding the address book into the chat list would bury the
+  // real chats under hundreds of empty entries.
+  const contactNames = new Map();
+
+  function recordContactName(jid, name) {
+    if (!jid || !name) return;
+    contactNames.set(jid, name);
+    // Apply it to a conversation that arrived before the name did and is
+    // still falling back to showing a raw address.
+    const chat = chats.get(jid);
+    if (chat && chat.name === jid) chat.name = name;
+  }
 
   // Only ever called when the store is over capacity, which for the live
   // message path means once per message while full, and for a bulk history
@@ -31,7 +47,7 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     } else {
       chat = {
         jid,
-        name: name || jid,
+        name: name || contactNames.get(jid) || jid,
         unread: 0,
         lastMessageAt: 0,
         archived: false,
@@ -44,7 +60,25 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
 
   function addMessage(jid, message, { incrementUnread = false, name } = {}) {
     const chat = touch(jid, name);
-    chat.messages.push(message);
+
+    // A history sync can re-deliver messages that are already here, and after
+    // a re-pair the same message can arrive both as history and live.
+    if (message.id && chat.messages.some((m) => m.id === message.id)) return chat;
+
+    // `messages` is kept sorted oldest-last. Live messages arrive in order and
+    // take the push; history sync arrives NEWEST FIRST, so those have to be
+    // placed. Without this the array ends up in whatever order events landed,
+    // which made "the last message" the oldest one in the batch and made the
+    // cap below trim the newest messages instead of the oldest.
+    const last = chat.messages[chat.messages.length - 1];
+    if (!last || message.timestamp >= last.timestamp) {
+      chat.messages.push(message);
+    } else {
+      let i = chat.messages.length;
+      while (i > 0 && chat.messages[i - 1].timestamp > message.timestamp) i--;
+      chat.messages.splice(i, 0, message);
+    }
+
     if (chat.messages.length > maxMessagesPerChat) {
       chat.messages.splice(0, chat.messages.length - maxMessagesPerChat);
     }
@@ -67,6 +101,9 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
    */
   function upsertChat(jid, { name, archived, unread, lastMessageAt } = {}) {
     const chat = touch(jid, name);
+    if (!name && chat.name === jid && contactNames.has(jid)) {
+      chat.name = contactNames.get(jid);
+    }
     if (typeof archived === 'boolean') chat.archived = archived;
     if (Number.isFinite(unread) && unread >= 0) chat.unread = unread;
     if (Number.isFinite(lastMessageAt) && lastMessageAt > chat.lastMessageAt) {
@@ -122,7 +159,15 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     return total;
   }
 
-  return { addMessage, upsertChat, markRead, listChats, getMessages, totalUnread };
+  return {
+    addMessage,
+    upsertChat,
+    recordContactName,
+    markRead,
+    listChats,
+    getMessages,
+    totalUnread,
+  };
 }
 
 module.exports = { createStore };
