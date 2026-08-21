@@ -77,13 +77,40 @@ ColumnLayout {
     readonly property bool archiveRowVisible: panel.filter.trim().length === 0
         && (panel.showArchived || panel.archivedChats.length > 0)
 
+    /**
+     * What to show for a chat with no name.
+     *
+     * Not every conversation has one: a number that is not in the address
+     * book has nothing to be called, exactly as in WhatsApp itself. The
+     * backend leaves `name` equal to the jid in that case, which is honest
+     * but unreadable — "491792369811@s.whatsapp.net" rather than a phone
+     * number. Only the address form is dressed up here; no name is invented.
+     */
+    function displayName(jid, name) {
+        if (name && name !== jid) return name;
+
+        var at = String(jid).indexOf("@");
+        if (at < 0) return jid;
+        var user = String(jid).slice(0, at);
+        var server = String(jid).slice(at + 1);
+
+        // A phone-number jid really is the number, so show it as one.
+        if (server === "s.whatsapp.net" || server === "c.us") return "+" + user;
+        // A LID is deliberately opaque — it is not a number and must not be
+        // shown as though it were one.
+        if (server === "lid") return i18nc("@item an unidentified contact", "Unknown contact");
+        if (server === "newsletter") return i18nc("@item an unnamed channel", "Channel");
+        if (server === "g.us") return i18nc("@item a group with no subject", "Group");
+        return jid;
+    }
+
     // The chat list carries display names; a conversation only knows its JID.
     function chatName(jid) {
         var chats = panel.backend.chats;
         for (var i = 0; i < chats.length; i++) {
-            if (chats[i].jid === jid) return chats[i].name;
+            if (chats[i].jid === jid) return panel.displayName(jid, chats[i].name);
         }
-        return jid;
+        return panel.displayName(jid, "");
     }
 
     /**
@@ -290,7 +317,8 @@ ColumnLayout {
                             Layout.preferredHeight: panel.avatarSize
                             Layout.alignment: Qt.AlignVCenter
                             jid: chatDelegate.modelData.jid
-                            name: chatDelegate.modelData.name
+                            name: panel.displayName(chatDelegate.modelData.jid,
+                                                    chatDelegate.modelData.name)
                         }
 
                         ColumnLayout {
@@ -302,7 +330,8 @@ ColumnLayout {
                                 elide: Text.ElideRight
                                 maximumLineCount: 1
                                 font.bold: true
-                                text: chatDelegate.modelData.name
+                                text: panel.displayName(chatDelegate.modelData.jid,
+                                                        chatDelegate.modelData.name)
                             }
 
                             RowLayout {
