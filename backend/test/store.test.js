@@ -322,3 +322,36 @@ test('names from a v2 cache are trusted and not overwritten', () => {
   revived.recordContactName('g@g.us', 'Someone Else');
   assert.strictEqual(revived.listChats()[0].name, 'Study Group');
 });
+
+test('a chat titled with the account holder own name is undone', () => {
+  const store = createStore();
+  store.addMessage('x@s.whatsapp.net',
+    { id: '1', fromMe: false, text: 'hi', timestamp: 1 }, { name: 'Alex' });
+  assert.strictEqual(store.listChats()[0].name, 'Alex');
+
+  assert.strictEqual(store.forgetWeakName('Alex'), 1);
+  assert.strictEqual(store.listChats()[0].name, 'x@s.whatsapp.net');
+});
+
+test('forgetting a weak name falls back to a known contact name', () => {
+  const store = createStore();
+  store.addMessage('x@s.whatsapp.net',
+    { id: '1', fromMe: false, text: 'hi', timestamp: 1 }, { name: 'Alex' });
+  store.recordContactName('y@s.whatsapp.net', 'unrelated');
+  store.restore({
+    version: 1,
+    chats: [{ jid: 'x@s.whatsapp.net', name: 'Alex', messages: [] }],
+    contactNames: [['x@s.whatsapp.net', 'Laura']],
+  });
+
+  store.forgetWeakName('Alex');
+  assert.strictEqual(store.listChats()[0].name, 'Laura');
+});
+
+test('a strong name matching the user own name is left alone', () => {
+  // Someone can genuinely be saved under the same name as the user.
+  const store = createStore();
+  store.upsertChat('x@s.whatsapp.net', { name: 'Alex' });
+  assert.strictEqual(store.forgetWeakName('Alex'), 0);
+  assert.strictEqual(store.listChats()[0].name, 'Alex');
+});

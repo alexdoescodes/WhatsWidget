@@ -122,6 +122,14 @@ function createWhatsAppClient({
           // Group subjects are queryable at any time, unlike history, so this
           // does not depend on a sync arriving. Without it a group only ever
           // gets the pushName of whoever last spoke in it.
+          // Undo chats an older build titled with the user's own name, taken
+          // from the pushName on their own outgoing messages. Only knowable
+          // once connected, since that is when the account's own name is.
+          const self = sock?.user;
+          if (self) {
+            store.forgetWeakName(self.name);
+            store.forgetWeakName(self.notify);
+          }
           fetchGroups();
           resolveNewsletterNames();
           resyncMetadata();

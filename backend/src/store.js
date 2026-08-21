@@ -250,6 +250,27 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
   }
 
   /**
+   * Drop a display name that was only ever a guess, wherever it was guessed.
+   *
+   * Used to undo chats titled with the account holder's own name: a pushName
+   * from an outgoing message, which older builds accepted. Strong names are
+   * left alone -- someone really can be saved in the address book under the
+   * same name as the user.
+   */
+  function forgetWeakName(name) {
+    if (!name) return 0;
+    let cleared = 0;
+    for (const chat of chats.values()) {
+      if (!chat.nameWeak || chat.name !== name) continue;
+      chat.name = contactNames.get(chat.jid) || chat.jid;
+      chat.nameWeak = false;
+      cleared += 1;
+    }
+    if (cleared > 0) revision += 1;
+    return cleared;
+  }
+
+  /**
    * Everything worth keeping across a restart, as plain JSON-able data.
    *
    * History only ever arrives when a device is linked, so without this a
@@ -316,6 +337,7 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     addMessage,
     upsertChat,
     recordContactName,
+    forgetWeakName,
     linkIdentity,
     canonical,
     markRead,
