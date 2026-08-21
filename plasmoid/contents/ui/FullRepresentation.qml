@@ -54,9 +54,11 @@ Item {
                 backend: full.backend
                 visible: full.backend.status === "needs-pairing"
                 // Fetching the code costs a loopback request, so only do it
-                // while the popup is actually open on a backend that wants
-                // pairing.
-                active: visible && root.expanded
+                // while the panel is actually on screen on a backend that
+                // wants pairing. Inline on the desktop there is no popup and
+                // `expanded` never becomes true, so gating on it alone would
+                // leave the QR permanently unfetched and pairing impossible.
+                active: visible && root.panelOnScreen
             }
 
             PlasmaComponents.Label {

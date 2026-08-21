@@ -1,4 +1,5 @@
 import QtQuick
+import org.kde.plasma.core as PlasmaCore
 import org.kde.plasma.plasmoid
 
 PlasmoidItem {
@@ -101,7 +102,20 @@ PlasmoidItem {
         root.hiddenThreshold = 0;
     }
 
-    preferredRepresentation: compactRepresentation
+    // On the desktop the widget is a resizable tile with room to spare, so
+    // show the chat panel itself rather than an icon that has to be clicked.
+    // In a panel there is no such room, so it stays a compact icon with the
+    // unread badge and opens the panel as a popup.
+    // Planar (0) is the desktop containment; Horizontal/Vertical are panels.
+    readonly property bool inlineOnDesktop: Plasmoid.formFactor === PlasmaCore.Types.Planar
+
+    // Whether the chat panel is actually on screen, by either route. `expanded`
+    // only tracks the popup, and there is no popup when the full representation
+    // is displayed inline — so anything that should run "while the user can see
+    // the panel" has to consult this, not `expanded` alone.
+    readonly property bool panelOnScreen: root.inlineOnDesktop || root.expanded
+
+    preferredRepresentation: root.inlineOnDesktop ? fullRepresentation : compactRepresentation
     compactRepresentation: CompactRepresentation {}
     fullRepresentation: FullRepresentation {}
 }
