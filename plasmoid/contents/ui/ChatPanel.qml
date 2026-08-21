@@ -1,5 +1,6 @@
 pragma ComponentBehavior: Bound
 
+import QtQml
 import QtQuick
 import QtQuick.Layouts
 import org.kde.kirigami as Kirigami
@@ -11,15 +12,41 @@ import org.kde.plasma.components as PlasmaComponents
  * Everything here is push driven. The chat list is whatever `backend.chats`
  * currently holds (the client replaces it when the backend pushes an event),
  * and an open conversation grows from the `messageReceived` signal. Nothing
- * polls.
+ * polls, and nothing here animates or runs an effect — the widget is meant to
+ * cost nothing while it sits on the desktop.
+ *
+ * The panel deliberately has no title bar of its own. The owner
+ * (FullRepresentation) draws one header for the whole widget and adapts it to
+ * `activeJid`, which is why that property and closeChat()/chatName() are part
+ * of this file's surface rather than private state.
  */
 ColumnLayout {
     id: panel
 
     required property var backend
     property string activeJid: ""
+    // Free-text filter over the chat list, driven by the header's search box.
+    property string filter: ""
 
-    spacing: Kirigami.Units.smallSpacing
+    spacing: 0
+
+    // Row metrics, shared so the avatar, the row separator's inset and the
+    // unread badge cannot drift apart.
+    readonly property int avatarSize: Kirigami.Units.gridUnit * 2
+    readonly property int badgeSize: Math.round(Kirigami.Units.gridUnit)
+    readonly property int rowPadding: Kirigami.Units.largeSpacing
+
+    /**
+     * The chats the list actually shows. Recomputed only when the backend
+     * pushes a new list or the user types — there is no timer behind it.
+     */
+    readonly property var visibleChats: {
+        const needle = panel.filter.trim().toLowerCase();
+        if (needle.length === 0) return panel.backend.chats;
+        return panel.backend.chats.filter(function (chat) {
+            return String(chat.name).toLowerCase().indexOf(needle) >= 0;
+        });
+    }
 
     // The chat list carries display names; a conversation only knows its JID.
     function chatName(jid) {
@@ -28,6 +55,41 @@ ColumnLayout {
             if (chats[i].jid === jid) return chats[i].name;
         }
         return jid;
+    }
+
+    /**
+     * A one-line preview of the newest message.
+     *
+     * Guarded rather than read straight off the record: a backend from before
+     * the preview field existed sends chats without it, and the panel should
+     * degrade to a name-only row instead of printing "undefined". Newlines are
+     * flattened because this is one line of a fixed-height row.
+     */
+    function previewText(chat) {
+        if (!chat || !chat.lastMessageText) return "";
+        return String(chat.lastMessageText).replace(/\s+/g, " ").trim();
+    }
+
+    /**
+     * The right-hand timestamp. `lastMessageAt` is a Unix time in *seconds*
+     * (Baileys' messageTimestamp, passed through the store unchanged), so it
+     * needs scaling before Date sees it.
+     *
+     * Today's chats show a clock time and older ones a short date. The
+     * "today" test reads the wall clock at binding time; nothing re-runs it on
+     * a schedule, so a panel left open across midnight keeps yesterday's
+     * labels until the next push. That is the correct trade here — the
+     * alternative is a timer ticking all night for a cosmetic refresh.
+     */
+    function timeLabel(unixSeconds) {
+        if (!(unixSeconds > 0)) return "";
+        const when = new Date(unixSeconds * 1000);
+        const now = new Date();
+        const sameDay = when.getFullYear() === now.getFullYear()
+            && when.getMonth() === now.getMonth()
+            && when.getDate() === now.getDate();
+        return sameDay ? Qt.formatTime(when, "hh:mm")
+                       : Qt.formatDate(when, Locale.ShortFormat);
     }
 
     function openChat(jid) {
@@ -82,77 +144,193 @@ ColumnLayout {
     }
 
     // --- Chat list (shown when no chat is open) ---
-    PlasmaComponents.ScrollView {
+    Item {
         Layout.fillWidth: true
         Layout.fillHeight: true
         visible: panel.activeJid === ""
 
-        // ScrollView takes a single Flickable as its content item and drives
-        // it; the ListView must therefore not be anchored or sized here.
-        ListView {
-            model: panel.backend.chats
+        PlasmaComponents.ScrollView {
+            anchors.fill: parent
 
-            delegate: PlasmaComponents.ItemDelegate {
-                id: chatDelegate
+            // ScrollView takes a single Flickable as its content item and
+            // drives it; the ListView must therefore not be anchored or sized
+            // here.
+            ListView {
+                id: chatList
 
-                required property var modelData
+                model: panel.visibleChats
+                clip: true
 
-                width: ListView.view.width
-                onClicked: panel.openChat(chatDelegate.modelData.jid)
+                delegate: PlasmaComponents.ItemDelegate {
+                    id: chatDelegate
 
-                // Replacing the default icon+text content item keeps a long
-                // chat name from running underneath the unread count.
-                contentItem: RowLayout {
-                    spacing: Kirigami.Units.smallSpacing
+                    required property var modelData
+                    required property int index
 
-                    Kirigami.Icon {
-                        source: "user-identity"
-                        Layout.preferredWidth: Kirigami.Units.iconSizes.small
-                        Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                    readonly property string preview: panel.previewText(chatDelegate.modelData)
+
+                    width: chatList.width
+                    topPadding: panel.rowPadding
+                    bottomPadding: panel.rowPadding
+                    leftPadding: panel.rowPadding
+                    rightPadding: panel.rowPadding
+
+                    onClicked: panel.openChat(chatDelegate.modelData.jid)
+
+                    // The stock ItemDelegate background is replaced so the row
+                    // separator can be inset past the avatar, the way the
+                    // design has it. Hover and press feedback is rebuilt here
+                    // as plain alpha over the accent colour — no effect, no
+                    // shadow, nothing that repaints unless the pointer moves.
+                    background: Rectangle {
+                        readonly property color accent: Kirigami.Theme.highlightColor
+
+                        color: chatDelegate.pressed
+                            ? Qt.rgba(accent.r, accent.g, accent.b, 0.30)
+                            : chatDelegate.hovered
+                                ? Qt.rgba(accent.r, accent.g, accent.b, 0.15)
+                                : "transparent"
+
+                        Kirigami.Separator {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            anchors.leftMargin: panel.rowPadding + panel.avatarSize
+                                + Kirigami.Units.largeSpacing
+                            // The last row has nothing below it to be
+                            // separated from.
+                            visible: chatDelegate.index < chatList.count - 1
+                        }
                     }
 
-                    PlasmaComponents.Label {
-                        Layout.fillWidth: true
-                        elide: Text.ElideRight
-                        text: chatDelegate.modelData.name
-                    }
+                    contentItem: RowLayout {
+                        spacing: Kirigami.Units.largeSpacing
 
-                    PlasmaComponents.Label {
-                        visible: chatDelegate.modelData.unread > 0
-                        text: chatDelegate.modelData.unread
-                        color: Kirigami.Theme.highlightColor
+                        ChatAvatar {
+                            Layout.preferredWidth: panel.avatarSize
+                            Layout.preferredHeight: panel.avatarSize
+                            Layout.alignment: Qt.AlignVCenter
+                            jid: chatDelegate.modelData.jid
+                            name: chatDelegate.modelData.name
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 0
+
+                            PlasmaComponents.Label {
+                                Layout.fillWidth: true
+                                elide: Text.ElideRight
+                                maximumLineCount: 1
+                                font.bold: true
+                                text: chatDelegate.modelData.name
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Kirigami.Units.smallSpacing
+                                // A chat whose backend predates the preview
+                                // field collapses back to a single-line row
+                                // rather than reserving space for nothing.
+                                visible: chatDelegate.preview.length > 0
+
+                                PlasmaComponents.Label {
+                                    // The "sent by you" double check. U+2713
+                                    // twice, kerned together — measured as
+                                    // rendering through font fallback on this
+                                    // system; there is no Breeze icon for it,
+                                    // and two stacked icon items per row would
+                                    // cost more than two glyphs.
+                                    text: "✓✓"
+                                    font.pixelSize: Kirigami.Theme.smallFont.pixelSize
+                                    // Kerned together so the pair reads as one
+                                    // double-check mark rather than two ticks.
+                                    font.letterSpacing: -Math.round(
+                                        Kirigami.Theme.smallFont.pixelSize * 0.3)
+                                    color: Kirigami.Theme.disabledTextColor
+                                    visible: chatDelegate.modelData.lastMessageFromMe === true
+                                }
+
+                                PlasmaComponents.Label {
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                    maximumLineCount: 1
+                                    font: Kirigami.Theme.smallFont
+                                    color: Kirigami.Theme.disabledTextColor
+                                    text: chatDelegate.preview
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillHeight: true
+                            Layout.alignment: Qt.AlignVCenter
+                            spacing: Kirigami.Units.smallSpacing
+
+                            PlasmaComponents.Label {
+                                Layout.alignment: Qt.AlignRight | Qt.AlignTop
+                                font: Kirigami.Theme.smallFont
+                                color: chatDelegate.modelData.unread > 0
+                                    ? Kirigami.Theme.highlightColor
+                                    : Kirigami.Theme.disabledTextColor
+                                text: panel.timeLabel(chatDelegate.modelData.lastMessageAt)
+                            }
+
+                            Item { Layout.fillHeight: true }
+
+                            Rectangle {
+                                Layout.alignment: Qt.AlignRight | Qt.AlignBottom
+                                Layout.preferredHeight: panel.badgeSize
+                                Layout.preferredWidth: Math.max(
+                                    unreadLabel.implicitWidth + Kirigami.Units.smallSpacing * 2,
+                                    panel.badgeSize)
+                                radius: height / 2
+                                color: Kirigami.Theme.highlightColor
+                                visible: chatDelegate.modelData.unread > 0
+
+                                PlasmaComponents.Label {
+                                    id: unreadLabel
+                                    anchors.centerIn: parent
+                                    font: Kirigami.Theme.smallFont
+                                    color: Kirigami.Theme.highlightedTextColor
+                                    text: chatDelegate.modelData.unread > 99
+                                        ? i18nc("@info shortened unread count", "99+")
+                                        : String(chatDelegate.modelData.unread)
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+
+        PlasmaComponents.Label {
+            anchors.centerIn: parent
+            width: parent.width - Kirigami.Units.gridUnit * 2
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.WordWrap
+            color: Kirigami.Theme.disabledTextColor
+            visible: chatList.count === 0
+            text: panel.filter.trim().length > 0
+                ? i18nc("@info:placeholder", "No chats match “%1”.", panel.filter.trim())
+                : i18nc("@info:placeholder", "No chats yet.")
+        }
     }
 
     // --- Conversation (shown when a chat is open) ---
-    RowLayout {
-        Layout.fillWidth: true
-        visible: panel.activeJid !== ""
-
-        PlasmaComponents.ToolButton {
-            icon.name: "go-previous"
-            onClicked: panel.closeChat()
-        }
-
-        PlasmaComponents.Label {
-            Layout.fillWidth: true
-            elide: Text.ElideRight
-            text: panel.chatName(panel.activeJid)
-        }
-    }
-
     PlasmaComponents.ScrollView {
         Layout.fillWidth: true
         Layout.fillHeight: true
+        Layout.topMargin: Kirigami.Units.smallSpacing
+        Layout.leftMargin: Kirigami.Units.smallSpacing
+        Layout.rightMargin: Kirigami.Units.smallSpacing
         visible: panel.activeJid !== ""
 
         ListView {
             id: messageList
             model: messageModel
             spacing: Kirigami.Units.smallSpacing
+            clip: true
 
             // Keep the newest message in view. Positioning right after the
             // appends is not enough: opening a chat also makes this view
@@ -168,7 +346,7 @@ ColumnLayout {
                 required property bool fromMe
                 required property string text
 
-                width: ListView.view.width
+                width: messageList.width
                 height: bubble.height
 
                 Rectangle {
@@ -176,17 +354,17 @@ ColumnLayout {
 
                     anchors.right: messageRow.fromMe ? parent.right : undefined
                     anchors.left: messageRow.fromMe ? undefined : parent.left
-                    width: Math.min(bubbleText.implicitWidth + Kirigami.Units.largeSpacing,
-                                    messageRow.width * 0.8)
+                    width: Math.min(bubbleText.implicitWidth + Kirigami.Units.largeSpacing * 2,
+                                    messageRow.width * 0.82)
                     height: bubbleText.implicitHeight + Kirigami.Units.smallSpacing * 2
-                    radius: Kirigami.Units.cornerRadius
+                    radius: Kirigami.Units.cornerRadius * 2
                     color: messageRow.fromMe ? Kirigami.Theme.highlightColor
                                              : Kirigami.Theme.alternateBackgroundColor
 
                     PlasmaComponents.Label {
                         id: bubbleText
                         anchors.centerIn: parent
-                        width: parent.width - Kirigami.Units.largeSpacing
+                        width: parent.width - Kirigami.Units.largeSpacing * 2
                         wrapMode: Text.WordWrap
                         text: messageRow.text
                         // The highlight colour is a background here, so the
@@ -200,8 +378,16 @@ ColumnLayout {
         }
     }
 
+    Kirigami.Separator {
+        Layout.fillWidth: true
+        Layout.topMargin: Kirigami.Units.smallSpacing
+        visible: panel.activeJid !== ""
+    }
+
     RowLayout {
         Layout.fillWidth: true
+        Layout.margins: Kirigami.Units.smallSpacing
+        spacing: Kirigami.Units.smallSpacing
         visible: panel.activeJid !== ""
 
         PlasmaComponents.TextField {
@@ -213,6 +399,8 @@ ColumnLayout {
 
         PlasmaComponents.ToolButton {
             icon.name: "document-send"
+            display: PlasmaComponents.AbstractButton.IconOnly
+            text: i18nc("@action:button", "Send")
             enabled: composer.text.length > 0
             onClicked: panel.sendComposed()
         }
