@@ -124,6 +124,7 @@ function createWhatsAppClient({
           // gets the pushName of whoever last spoke in it.
           fetchGroups();
           resolveNewsletterNames();
+          resyncMetadata();
         }
 
         if (connection === 'close') {
@@ -265,6 +266,32 @@ function createWhatsAppClient({
       changed = changed || ids.length > 0;
     }
     return changed;
+  }
+
+  /**
+   * Re-requests the account's app state: contacts, and the archive flags that
+   * history sync does not carry.
+   *
+   * History only arrives when a device is linked, but app state can be asked
+   * for at any time -- which is the difference between "re-pair to fix your
+   * chat names" and the widget repairing itself on the next connect.
+   *
+   * A full resync (from version 0) is only worth its cost when something is
+   * actually missing, so it is used just while chats are still showing raw
+   * addresses. Once names are learned this settles into the cheap incremental
+   * form, and eventually into a no-op.
+   */
+  async function resyncMetadata() {
+    if (!sock || typeof sock.resyncAppState !== 'function') return;
+
+    const unnamed = store.listChats().some((chat) => chat.name === chat.jid);
+    try {
+      await sock.resyncAppState(baileys.ALL_WA_PATCH_NAMES, unnamed);
+    } catch (err) {
+      // Not fatal: the connection is fine, the widget just keeps whatever
+      // names and archive flags it already had.
+      logger.error('could not resync app state:', err.message);
+    }
   }
 
   /**
