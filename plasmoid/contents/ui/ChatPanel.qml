@@ -227,22 +227,34 @@ ColumnLayout {
         messageModel.clear();
     }
 
+    /** Whether a message is already on screen, by id. */
+    function hasMessage(id) {
+        if (!id) return false;
+        for (var i = messageModel.count - 1; i >= 0; i--) {
+            if (messageModel.get(i).id === id) return true;
+        }
+        return false;
+    }
+
     function sendComposed() {
         var text = composer.text;
         if (text.length === 0) return;
+        var wanted = panel.activeJid;
         composer.text = "";
-        panel.backend.send(panel.activeJid, text, function (err) {
+        panel.backend.send(wanted, text, function (err, data) {
             if (err) {
                 // Nothing was delivered, so give the text back rather than
                 // silently eating it.
                 composer.text = text;
                 return;
             }
-            // The backend does not write sent messages to its store; Baileys
-            // echoes them back as an inbound event, which the handler below
-            // deliberately ignores. So this append is the only one.
+            if (panel.activeJid !== wanted) return;
+            // Shown with the id WhatsApp assigned, so the echo that follows
+            // is recognised as this message rather than appended again.
+            var id = (data && data.id) ? data.id : "";
+            if (panel.hasMessage(id)) return;
             messageModel.append(panel.messageRow(
-                { id: "local", fromMe: true, text: text, timestamp: 0 }));
+                { id: id, fromMe: true, text: text, timestamp: 0 }));
         });
     }
 
@@ -252,11 +264,14 @@ ColumnLayout {
         target: panel.backend
 
         function onMessageReceived(jid, message) {
-            // Outgoing messages are echoed back by WhatsApp itself. The
-            // composer has already appended them, so taking these too would
-            // show every sent message twice.
-            if (message.fromMe) return;
             if (jid !== panel.activeJid) return;
+            // Outgoing messages are echoed back by WhatsApp itself, and the
+            // composer has usually put this one on screen already. Match on
+            // the id rather than skipping every outgoing message: one sent
+            // from the user's phone arrives the same way and has never been
+            // seen here, and dropping those left the conversation silently
+            // missing half of itself.
+            if (panel.hasMessage(message.id)) return;
             messageModel.append(panel.messageRow(message));
             panel.backend.markRead(jid);
         }

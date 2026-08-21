@@ -17,7 +17,8 @@ function build({ verify = async () => ({ ok: true }), sendMessage } = {}) {
     events,
     getStatus: () => 'connected',
     getQrPng: () => null,
-    sendMessage: sendMessage || (async (jid, text) => { client.sent = { jid, text }; }),
+    sendMessage: sendMessage
+      || (async (jid, text) => { client.sent = { jid, text }; return 'WAMSGID'; }),
   };
   const endpointFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ww-')), 'endpoint.json');
   const server = createServer({ client, store, authenticator: { verify }, endpointFile });
@@ -72,7 +73,10 @@ test('sends a message through the client', async () => {
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ text: 'hi' }),
   });
-  assert.strictEqual(res.status, 204);
+  // 200 with the id, not 204: the caller needs the id WhatsApp assigned so it
+  // can recognise the echo of this message instead of showing it twice.
+  assert.strictEqual(res.status, 200);
+  assert.deepStrictEqual(await res.json(), { id: 'WAMSGID' });
   assert.deepStrictEqual(client.sent, { jid: 'friend@s.whatsapp.net', text: 'hi' });
   await server.close();
 });

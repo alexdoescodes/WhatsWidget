@@ -176,8 +176,14 @@ function createWhatsAppClient({
         }
       });
 
+      // 'notify' is a message arriving now. 'append' is one being added to
+      // the conversation without a notification -- which is how WhatsApp
+      // delivers everything the USER sent, whether from this widget or from
+      // their phone. Dropping it meant a sent message existed only in the
+      // panel that sent it and vanished as soon as the chat was reopened, and
+      // that a reply written on the phone never showed up here at all.
       sock.ev.on('messages.upsert', ({ messages, type }) => {
-        if (type !== 'notify') return;
+        if (type !== 'notify' && type !== 'append') return;
         for (const waMessage of messages) {
           const jid = waMessage.key?.remoteJid;
           if (!isConversation(jid)) continue;
@@ -197,7 +203,13 @@ function createWhatsAppClient({
           // that a contact name or group subject overrides.
           const pushName = (!fromMe && jid.endsWith('@s.whatsapp.net'))
             ? waMessage.pushName : undefined;
-          store.addMessage(jid, message, { incrementUnread: !fromMe, name: pushName });
+          // Only a genuine arrival counts towards unread. An 'append' batch
+          // can also carry older messages being backfilled, and those must
+          // not light up the badge.
+          store.addMessage(jid, message, {
+            incrementUnread: type === 'notify' && !fromMe,
+            name: pushName,
+          });
           events.emit('message', { jid, message });
         }
       });
@@ -434,14 +446,50 @@ function createWhatsAppClient({
     }
   }
 
+  /**
+   * Send a text message, returning the id WhatsApp assigned it.
+   *
+   * The id matters to the caller: the widget shows the message immediately
+   * rather than waiting for the round trip, and WhatsApp then echoes the same
+   * message back as an 'append'. Without the real id the echo cannot be
+   * recognised as one already on screen, and the choice is between showing it
+   * twice or dropping every message the user sends from another device.
+   */
   async function sendMessage(jid, text) {
     if (!sock) throw new Error('not connected');
-    await sock.sendMessage(jid, { text });
+    const sent = await sock.sendMessage(jid, { text });
+    return sent?.key?.id || '';
+  }
+
+  /**
+   * Close the connection cleanly.
+   *
+   * Signal state advances a ratchet on every message. Killing the process
+   * mid-flight can leave that state half-written, and the far end then cannot
+   * decrypt what we send -- WhatsApp shows the recipient "Waiting for this
+   * message" and it never arrives. Ending the socket lets Baileys flush before
+   * the process goes away.
+   */
+  async function stop() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (!sock) return;
+    const closing = sock;
+    sock = null;
+    try {
+      closing.ev.removeAllListeners();
+      if (typeof closing.end === 'function') closing.end();
+    } catch {
+      // Already gone; nothing to close.
+    }
   }
 
   return {
     events,
     start,
+    stop,
     sendMessage,
     /**
      * The URL of a contact's profile picture, or '' when there is none.

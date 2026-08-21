@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const { buildConfig } = require('./config');
 const { createStore } = require('./store');
 const { createPersistence } = require('./persist');
+const { acquireLock } = require('./lock');
 const { createAvatarCache } = require('./avatars');
 const { createMediaCache } = require('./media');
 const { downloadContentFromMessage } = require('baileys');
@@ -13,6 +14,12 @@ const { createServer } = require('./server');
 
 async function main() {
   const config = buildConfig();
+
+  // Before anything touches the session directory: two backends sharing it
+  // desynchronise the Signal ratchet, and the symptom lands on the people the
+  // user is messaging, not here.
+  const lock = acquireLock({ file: config.lockFile });
+
   fs.mkdirSync(config.sessionDir, { recursive: true });
 
   const store = createStore({
@@ -67,12 +74,28 @@ async function main() {
 
   await client.start();
 
+  let shuttingDown = false;
   const shutdown = async () => {
+    // SIGTERM then SIGINT (or systemd retrying) must not run this twice and
+    // race the credential flush against itself.
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    // Close the WhatsApp socket FIRST. Signal state advances per message, and
+    // exiting with it half-written leaves the far end unable to decrypt what
+    // we sent -- the recipient sees "Waiting for this message" forever.
+    try {
+      await client.stop();
+    } catch (err) {
+      console.error('could not close the WhatsApp connection cleanly:', err.message);
+    }
+
     persistence.stop();
     // Final flush: the interval may be up to 10s stale, and everything learned
     // in that window would otherwise need another device link to recover.
     persistence.save();
     await server.close();
+    lock.release();
     process.exit(0);
   };
   process.on('SIGINT', shutdown);

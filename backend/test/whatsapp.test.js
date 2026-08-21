@@ -245,3 +245,84 @@ test('Channels are conversations; the status carousel is not', () => {
   assert.strictEqual(isConversation(''), false);
   assert.strictEqual(isConversation(undefined), false);
 });
+
+test('a message the user sent is stored, not dropped', async () => {
+  // WhatsApp delivers the user's own messages as 'append', not 'notify'.
+  // Dropping those made a sent message vanish when the chat was reopened.
+  const { client, sock, store } = build();
+  await client.start();
+
+  sock.ev.emit('messages.upsert', {
+    type: 'append',
+    messages: [{
+      key: { remoteJid: 'x@s.whatsapp.net', fromMe: true, id: 'SENT1' },
+      message: { conversation: 'sent from the widget' },
+      messageTimestamp: 10,
+    }],
+  });
+
+  const messages = store.getMessages('x@s.whatsapp.net');
+  assert.strictEqual(messages.length, 1);
+  assert.strictEqual(messages[0].text, 'sent from the widget');
+  assert.strictEqual(messages[0].fromMe, true);
+});
+
+test('a reply written on the phone reaches the widget', async () => {
+  const { client, sock, store } = build();
+  await client.start();
+
+  sock.ev.emit('messages.upsert', {
+    type: 'append',
+    messages: [{
+      key: { remoteJid: 'x@s.whatsapp.net', fromMe: true, id: 'PHONE1' },
+      message: { conversation: 'answered on my phone' },
+      messageTimestamp: 20,
+    }],
+  });
+
+  assert.strictEqual(store.getMessages('x@s.whatsapp.net')[0].text, 'answered on my phone');
+});
+
+test('an appended message does not light up the unread badge', async () => {
+  const { client, sock, store } = build();
+  await client.start();
+
+  sock.ev.emit('messages.upsert', {
+    type: 'append',
+    messages: [{
+      key: { remoteJid: 'x@s.whatsapp.net', fromMe: false, id: 'BACKFILL' },
+      message: { conversation: 'older message being backfilled' },
+      messageTimestamp: 5,
+    }],
+  });
+  assert.strictEqual(store.totalUnread(), 0, 'a backfill is not a new message');
+
+  sock.ev.emit('messages.upsert', {
+    type: 'notify',
+    messages: [{
+      key: { remoteJid: 'x@s.whatsapp.net', fromMe: false, id: 'REAL' },
+      message: { conversation: 'actually new' },
+      messageTimestamp: 6,
+    }],
+  });
+  assert.strictEqual(store.totalUnread(), 1);
+});
+
+test('the same message arriving twice is stored once', async () => {
+  // The echo of a sent message can follow the widget's own optimistic copy.
+  const { client, sock, store } = build();
+  await client.start();
+
+  const event = {
+    type: 'append',
+    messages: [{
+      key: { remoteJid: 'x@s.whatsapp.net', fromMe: true, id: 'DUP' },
+      message: { conversation: 'once' },
+      messageTimestamp: 30,
+    }],
+  };
+  sock.ev.emit('messages.upsert', event);
+  sock.ev.emit('messages.upsert', event);
+
+  assert.strictEqual(store.getMessages('x@s.whatsapp.net').length, 1);
+});

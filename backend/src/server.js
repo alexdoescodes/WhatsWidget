@@ -103,13 +103,15 @@ function createServer({ client, store, authenticator, media, endpointFile }) {
       if (req.method === 'POST' && segments[2] === 'messages') {
         const body = await readJsonBody(req);
         if (!body.text) return json(res, 400, { error: 'text is required' });
+        let id = '';
         try {
-          await client.sendMessage(jid, body.text);
+          id = await client.sendMessage(jid, body.text);
         } catch (err) {
           return json(res, 503, { error: err.message });
         }
-        res.writeHead(204);
-        return res.end();
+        // The id, so the caller can recognise WhatsApp's echo of this very
+        // message instead of showing it a second time.
+        return json(res, 200, { id });
       }
 
       // Local-only removal from the widget's list. Deliberately does NOT

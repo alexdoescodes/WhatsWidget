@@ -23,6 +23,8 @@ function buildConfig(env = process.env, homedir = os.homedir(), uid = process.ge
     // Downloaded media, 0700. Same reasoning as avatarDir: the widget loads
     // these over file:// because QML's Image cannot send the bearer header.
     mediaDir: path.join(dataDir, 'media'),
+    // Single-instance lock. In the runtime dir so it cannot outlive a reboot.
+    lockFile: path.join(runtimeDir, 'whatsapp-widget.lock'),
     // Chat cache. Holds message text, so it is written 0600 -- see persist.js.
     storeFile: path.join(dataDir, 'chats.json'),
     // Dedicated PAM service: see plan Global Constraints. Never 'login'.
