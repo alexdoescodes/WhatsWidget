@@ -32,6 +32,20 @@ function toNumber(value) {
   return Number.isFinite(n) ? n : 0;
 }
 
+/**
+ * Whether a jid is a conversation the panel should list.
+ *
+ * Newsletters (WhatsApp Channels) and the status broadcast arrive in history
+ * sync alongside real chats, but they are feeds rather than conversations and
+ * carry no name we ever fetch -- listed, they show up as a bare
+ * 120363...@newsletter row.
+ */
+function isConversation(jid) {
+  if (typeof jid !== 'string' || !jid) return false;
+  if (jid === 'status@broadcast') return false;
+  return !jid.endsWith('@newsletter') && !jid.endsWith('@broadcast');
+}
+
 /** The best display name a contact record offers, in descending trust. */
 function contactName(contact) {
   return contact.name || contact.notify || contact.verifiedName || '';
@@ -134,7 +148,7 @@ function createWhatsAppClient({
         if (type !== 'notify') return;
         for (const waMessage of messages) {
           const jid = waMessage.key?.remoteJid;
-          if (!jid) continue;
+          if (!isConversation(jid)) continue;
           const fromMe = Boolean(waMessage.key.fromMe);
           const message = {
             id: waMessage.key.id,
@@ -155,7 +169,7 @@ function createWhatsAppClient({
         for (const contact of contacts) rememberContact(contact);
 
         for (const chat of chats) {
-          if (!chat.id) continue;
+          if (!isConversation(chat.id)) continue;
           store.upsertChat(chat.id, {
             name: chat.name || undefined,
             archived: typeof chat.archived === 'boolean' ? chat.archived : undefined,
@@ -166,7 +180,7 @@ function createWhatsAppClient({
 
         for (const waMessage of messages) {
           const jid = waMessage.key?.remoteJid;
-          if (!jid) continue;
+          if (!isConversation(jid)) continue;
           // Never increments unread: these are historical, and the phone
           // already told us the real per-chat count above.
           store.addMessage(jid, {
@@ -185,7 +199,7 @@ function createWhatsAppClient({
       const applyChats = (list) => {
         let changed = false;
         for (const chat of list) {
-          if (!chat.id) continue;
+          if (!isConversation(chat.id)) continue;
           store.upsertChat(chat.id, {
             name: chat.name || undefined,
             archived: typeof chat.archived === 'boolean' ? chat.archived : undefined,
@@ -225,15 +239,23 @@ function createWhatsAppClient({
    * would bury the real conversations.
    */
   function rememberContact(contact) {
-    const name = contactName(contact);
-    if (!name) return false;
-    let recorded = false;
-    for (const id of [contact.id, contact.jid, contact.lid]) {
-      if (!id) continue;
-      store.recordContactName(id, name);
-      recorded = true;
+    let changed = false;
+
+    // The contact record is the only place that states outright that a LID and
+    // a phone-number jid are the same person. Message keys carry just one form,
+    // so without this the two never get connected and the same conversation
+    // shows up twice.
+    const ids = [contact.id, contact.jid, contact.lid].filter(Boolean);
+    for (let i = 1; i < ids.length; i++) {
+      if (store.linkIdentity(ids[0], ids[i])) changed = true;
     }
-    return recorded;
+
+    const name = contactName(contact);
+    if (name) {
+      for (const id of ids) store.recordContactName(id, name);
+      changed = changed || ids.length > 0;
+    }
+    return changed;
   }
 
   /**
@@ -288,4 +310,4 @@ function createWhatsAppClient({
   };
 }
 
-module.exports = { createWhatsAppClient, extractText };
+module.exports = { createWhatsAppClient, extractText, isConversation };

@@ -27,6 +27,54 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
   // regardless.
   let revision = 0;
 
+  // Alias -> canonical jid. WhatsApp addresses one person two ways: a
+  // phone-number jid (@s.whatsapp.net) and an anonymised LID (@lid). Left
+  // alone they become two chats for the same conversation, and answering from
+  // the phone appears to open a brand new one.
+  const aliases = new Map();
+
+  /** The id a conversation is actually filed under. */
+  function canonical(jid) {
+    return aliases.get(jid) || jid;
+  }
+
+  /**
+   * Declare that two ids are the same person, and fold together anything
+   * already filed under both.
+   *
+   * The phone-number form wins as canonical: it is what contact names, group
+   * participant lists and the user's own intuition are keyed by, whereas a LID
+   * is opaque.
+   */
+  function linkIdentity(a, b) {
+    if (!a || !b || a === b) return false;
+    const primary = b.endsWith('@lid') ? a : b;
+    const alias = primary === a ? b : a;
+    if (aliases.get(alias) === primary) return false;
+
+    aliases.set(alias, primary);
+    revision += 1;
+
+    const from = chats.get(alias);
+    if (!from) return true;
+    chats.delete(alias);
+
+    const into = chats.get(primary);
+    if (!into) {
+      // Nothing to merge with: refile it under the canonical id.
+      from.jid = primary;
+      chats.set(primary, from);
+      return true;
+    }
+
+    for (const message of from.messages) addMessage(primary, message);
+    into.unread += from.unread;
+    into.archived = into.archived || from.archived;
+    if (from.lastMessageAt > into.lastMessageAt) into.lastMessageAt = from.lastMessageAt;
+    if (into.name === primary && from.name !== alias) into.name = from.name;
+    return true;
+  }
+
   function recordContactName(jid, name) {
     if (!jid || !name) return;
     if (contactNames.get(jid) === name) return;
@@ -34,8 +82,8 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     contactNames.set(jid, name);
     // Apply it to a conversation that arrived before the name did and is
     // still falling back to showing a raw address.
-    const chat = chats.get(jid);
-    if (chat && chat.name === jid) chat.name = name;
+    const chat = chats.get(canonical(jid));
+    if (chat && chat.name === chat.jid) chat.name = name;
   }
 
   // Only ever called when the store is over capacity, which for the live
@@ -47,7 +95,8 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     for (const chat of ordered.slice(maxChats)) chats.delete(chat.jid);
   }
 
-  function touch(jid, name) {
+  function touch(rawJid, name) {
+    const jid = canonical(rawJid);
     let chat = chats.get(jid);
     if (chat) {
       if (name) chat.name = name;
@@ -122,8 +171,8 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     return chat;
   }
 
-  function markRead(jid) {
-    const chat = chats.get(jid);
+  function markRead(rawJid) {
+    const chat = chats.get(canonical(rawJid));
     if (chat && chat.unread !== 0) {
       chat.unread = 0;
       revision += 1;
@@ -152,8 +201,8 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
       });
   }
 
-  function getMessages(jid) {
-    const chat = chats.get(jid);
+  function getMessages(rawJid) {
+    const chat = chats.get(canonical(rawJid));
     return chat ? chat.messages : [];
   }
 
@@ -183,6 +232,7 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
       version: 1,
       chats: [...chats.values()],
       contactNames: [...contactNames.entries()],
+      aliases: [...aliases.entries()],
     };
   }
 
@@ -192,6 +242,11 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
 
     chats.clear();
     contactNames.clear();
+    aliases.clear();
+
+    for (const entry of data.aliases || []) {
+      if (Array.isArray(entry) && entry[0] && entry[1]) aliases.set(entry[0], entry[1]);
+    }
 
     for (const entry of data.contactNames || []) {
       if (Array.isArray(entry) && entry[0] && entry[1]) contactNames.set(entry[0], entry[1]);
@@ -220,6 +275,8 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     addMessage,
     upsertChat,
     recordContactName,
+    linkIdentity,
+    canonical,
     markRead,
     listChats,
     getMessages,

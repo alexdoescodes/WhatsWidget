@@ -188,3 +188,60 @@ test('a contact name never overwrites a real chat title', () => {
   store.recordContactName('g@g.us', 'Someone Else');
   assert.strictEqual(store.listChats()[0].name, 'Study Group');
 });
+
+test('a LID and a phone-number jid become one chat', () => {
+  const store = createStore();
+  store.addMessage('99@lid', { id: 'a', fromMe: false, text: 'from lid', timestamp: 10 },
+    { incrementUnread: true });
+  store.addMessage('99@s.whatsapp.net', { id: 'b', fromMe: true, text: 'from pn', timestamp: 20 });
+  assert.strictEqual(store.listChats().length, 2, 'precondition: two chats for one person');
+
+  store.linkIdentity('99@lid', '99@s.whatsapp.net');
+
+  const chats = store.listChats();
+  assert.strictEqual(chats.length, 1);
+  assert.strictEqual(chats[0].jid, '99@s.whatsapp.net', 'the phone-number form is canonical');
+  assert.strictEqual(chats[0].unread, 1, 'unread is carried over, not dropped');
+  assert.deepStrictEqual(store.getMessages('99@s.whatsapp.net').map((m) => m.text),
+    ['from lid', 'from pn']);
+});
+
+test('a chat stays reachable by its old id after merging', () => {
+  // The widget may still be holding the alias when the user clicks it.
+  const store = createStore();
+  store.addMessage('99@lid', { id: 'a', fromMe: false, text: 'hi', timestamp: 10 });
+  store.linkIdentity('99@lid', '99@s.whatsapp.net');
+
+  assert.strictEqual(store.getMessages('99@lid').length, 1);
+  store.markRead('99@lid');
+  assert.strictEqual(store.totalUnread(), 0);
+});
+
+test('a later message on either id lands in the same chat', () => {
+  // This is the "answering from my phone opens a new chat" symptom.
+  const store = createStore();
+  store.linkIdentity('99@lid', '99@s.whatsapp.net');
+  store.addMessage('99@lid', { id: 'a', fromMe: false, text: 'them', timestamp: 10 });
+  store.addMessage('99@s.whatsapp.net', { id: 'b', fromMe: true, text: 'me', timestamp: 20 });
+
+  assert.strictEqual(store.listChats().length, 1);
+  assert.strictEqual(store.getMessages('99@lid').length, 2);
+});
+
+test('merging keeps the better of the two names', () => {
+  const store = createStore();
+  store.upsertChat('99@lid', { name: 'Laura' });
+  store.addMessage('99@s.whatsapp.net', { id: 'b', fromMe: false, text: 'hi', timestamp: 1 });
+  store.linkIdentity('99@lid', '99@s.whatsapp.net');
+
+  assert.strictEqual(store.listChats()[0].name, 'Laura');
+});
+
+test('aliases survive a restart', () => {
+  const store = createStore();
+  store.linkIdentity('99@lid', '99@s.whatsapp.net');
+  const revived = createStore();
+  revived.restore(JSON.parse(JSON.stringify(store.snapshot())));
+
+  assert.strictEqual(revived.canonical('99@lid'), '99@s.whatsapp.net');
+});
