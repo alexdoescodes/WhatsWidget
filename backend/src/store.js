@@ -83,7 +83,10 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     // Apply it to a conversation that arrived before the name did and is
     // still falling back to showing a raw address.
     const chat = chats.get(canonical(jid));
-    if (chat && chat.name === chat.jid) chat.name = name;
+    if (chat && (chat.name === chat.jid || chat.nameWeak)) {
+      chat.name = name;
+      chat.nameWeak = false;
+    }
   }
 
   // Only ever called when the store is over capacity, which for the live
@@ -95,27 +98,53 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     for (const chat of ordered.slice(maxChats)) chats.delete(chat.jid);
   }
 
-  function touch(rawJid, name) {
+  /**
+   * Find or create a chat, applying a display name by strength.
+   *
+   * A "weak" name is a pushName off a message: the name of whoever *sent*
+   * it. That is the right fallback for an unknown number and wrong for
+   * everything else -- on a message you sent it is your own name, and in a
+   * group it is the last person who spoke, either of which would otherwise
+   * rename the conversation out from under a real contact name or group
+   * subject. Weak names may fill a blank or replace another weak name; only a
+   * strong name (contact, group subject, sync) can overwrite a strong one.
+   */
+  function touch(rawJid, name, { weak = false } = {}) {
     const jid = canonical(rawJid);
     let chat = chats.get(jid);
-    if (chat) {
-      if (name) chat.name = name;
-    } else {
+
+    if (!chat) {
+      const known = contactNames.get(jid);
       chat = {
         jid,
-        name: name || contactNames.get(jid) || jid,
+        name: known || name || jid,
+        // A name from the contact registry is strong; one passed in here is
+        // only as strong as its caller claims.
+        nameWeak: known ? false : Boolean(name) && weak,
         unread: 0,
         lastMessageAt: 0,
         archived: false,
         messages: [],
       };
       chats.set(jid, chat);
+      return chat;
+    }
+
+    if (name) {
+      const unnamed = chat.name === chat.jid;
+      if (!weak) {
+        chat.name = name;
+        chat.nameWeak = false;
+      } else if (unnamed || chat.nameWeak) {
+        chat.name = name;
+        chat.nameWeak = true;
+      }
     }
     return chat;
   }
 
   function addMessage(jid, message, { incrementUnread = false, name } = {}) {
-    const chat = touch(jid, name);
+    const chat = touch(jid, name, { weak: true });
 
     // A history sync can re-deliver messages that are already here, and after
     // a re-pair the same message can arrive both as history and live.
@@ -259,6 +288,7 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
       chats.set(chat.jid, {
         jid: chat.jid,
         name: typeof chat.name === 'string' && chat.name ? chat.name : chat.jid,
+        nameWeak: chat.nameWeak === true,
         unread: Number.isFinite(chat.unread) && chat.unread > 0 ? chat.unread : 0,
         lastMessageAt: Number.isFinite(chat.lastMessageAt) ? chat.lastMessageAt : 0,
         archived: chat.archived === true,

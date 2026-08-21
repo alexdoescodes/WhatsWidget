@@ -165,7 +165,14 @@ function createWhatsAppClient({
             text: extractText(waMessage.message),
             timestamp: Number(waMessage.messageTimestamp) || 0,
           };
-          store.addMessage(jid, message, { incrementUnread: !fromMe, name: waMessage.pushName });
+          // pushName is the SENDER's name. On our own messages that is the
+          // user, and in a group it is whoever spoke last -- neither is the
+          // name of the conversation. Only offer it for an incoming 1:1
+          // message, and even then the store treats it as a weak fallback
+          // that a contact name or group subject overrides.
+          const pushName = (!fromMe && jid.endsWith('@s.whatsapp.net'))
+            ? waMessage.pushName : undefined;
+          store.addMessage(jid, message, { incrementUnread: !fromMe, name: pushName });
           events.emit('message', { jid, message });
         }
       });

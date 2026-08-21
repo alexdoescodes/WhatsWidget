@@ -245,3 +245,56 @@ test('aliases survive a restart', () => {
 
   assert.strictEqual(revived.canonical('99@lid'), '99@s.whatsapp.net');
 });
+
+test('a message you sent does not rename the chat after you', () => {
+  // pushName on an outgoing message is the user's own name.
+  const store = createStore();
+  store.upsertChat('x@s.whatsapp.net', { name: 'Laura' });
+  store.addMessage('x@s.whatsapp.net',
+    { id: '1', fromMe: true, text: 'hi', timestamp: 1 }, { name: 'Alex' });
+
+  assert.strictEqual(store.listChats()[0].name, 'Laura');
+});
+
+test('a group keeps its subject when someone speaks in it', () => {
+  const store = createStore();
+  store.upsertChat('g@g.us', { name: 'Study Group' });
+  store.addMessage('g@g.us',
+    { id: '1', fromMe: false, text: 'hi', timestamp: 1 }, { name: 'Marc' });
+
+  assert.strictEqual(store.listChats()[0].name, 'Study Group');
+});
+
+test('a pushName still names an otherwise unknown number', () => {
+  const store = createStore();
+  store.addMessage('x@s.whatsapp.net',
+    { id: '1', fromMe: false, text: 'hi', timestamp: 1 }, { name: 'Laura' });
+
+  assert.strictEqual(store.listChats()[0].name, 'Laura');
+});
+
+test('a contact name replaces a name guessed from a pushName', () => {
+  const store = createStore();
+  store.addMessage('x@s.whatsapp.net',
+    { id: '1', fromMe: false, text: 'hi', timestamp: 1 }, { name: 'Laura' });
+  store.recordContactName('x@s.whatsapp.net', 'Laura Schmidt');
+  assert.strictEqual(store.listChats()[0].name, 'Laura Schmidt');
+
+  // ...and a later pushName cannot undo it.
+  store.addMessage('x@s.whatsapp.net',
+    { id: '2', fromMe: false, text: 'yo', timestamp: 2 }, { name: 'Laura' });
+  assert.strictEqual(store.listChats()[0].name, 'Laura Schmidt');
+});
+
+test('name provenance survives a restart', () => {
+  const store = createStore();
+  store.addMessage('x@s.whatsapp.net',
+    { id: '1', fromMe: false, text: 'hi', timestamp: 1 }, { name: 'Laura' });
+
+  const revived = createStore();
+  revived.restore(JSON.parse(JSON.stringify(store.snapshot())));
+  revived.recordContactName('x@s.whatsapp.net', 'Laura Schmidt');
+
+  assert.strictEqual(revived.listChats()[0].name, 'Laura Schmidt',
+    'a weak name must still be replaceable after a reload');
+});
