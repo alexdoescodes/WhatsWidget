@@ -258,16 +258,27 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
    */
   function snapshot() {
     return {
-      version: 1,
+      version: 2,
       chats: [...chats.values()],
       contactNames: [...contactNames.entries()],
       aliases: [...aliases.entries()],
     };
   }
 
-  /** Replace the contents from a snapshot, re-applying both caps. */
+  /**
+   * Replace the contents from a snapshot, re-applying both caps.
+   *
+   * Version 1 predates name provenance. Its names were written by a store
+   * that let any pushName overwrite the chat title, so some of them are the
+   * last sender rather than the conversation -- including the user's own name
+   * on chats they wrote to. They cannot be told apart after the fact, so they
+   * all come back weak and the first real contact name or group subject
+   * corrects them.
+   */
   function restore(data) {
-    if (!data || data.version !== 1 || !Array.isArray(data.chats)) return false;
+    if (!data || !Array.isArray(data.chats)) return false;
+    if (data.version !== 1 && data.version !== 2) return false;
+    const namesUntrusted = data.version === 1;
 
     chats.clear();
     contactNames.clear();
@@ -288,7 +299,7 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
       chats.set(chat.jid, {
         jid: chat.jid,
         name: typeof chat.name === 'string' && chat.name ? chat.name : chat.jid,
-        nameWeak: chat.nameWeak === true,
+        nameWeak: namesUntrusted ? true : chat.nameWeak === true,
         unread: Number.isFinite(chat.unread) && chat.unread > 0 ? chat.unread : 0,
         lastMessageAt: Number.isFinite(chat.lastMessageAt) ? chat.lastMessageAt : 0,
         archived: chat.archived === true,

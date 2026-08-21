@@ -298,3 +298,27 @@ test('name provenance survives a restart', () => {
   assert.strictEqual(revived.listChats()[0].name, 'Laura Schmidt',
     'a weak name must still be replaceable after a reload');
 });
+
+test('names from a v1 cache are correctable, since some are the wrong person', () => {
+  const store = createStore();
+  const legacy = {
+    version: 1,
+    chats: [{ jid: 'x@s.whatsapp.net', name: 'Alex', unread: 0, lastMessageAt: 5, messages: [] }],
+    contactNames: [],
+  };
+  assert.ok(store.restore(legacy));
+  assert.strictEqual(store.listChats()[0].name, 'Alex');
+
+  store.recordContactName('x@s.whatsapp.net', 'Laura');
+  assert.strictEqual(store.listChats()[0].name, 'Laura');
+});
+
+test('names from a v2 cache are trusted and not overwritten', () => {
+  const store = createStore();
+  store.upsertChat('g@g.us', { name: 'Study Group' });
+  const revived = createStore();
+  revived.restore(JSON.parse(JSON.stringify(store.snapshot())));
+
+  revived.recordContactName('g@g.us', 'Someone Else');
+  assert.strictEqual(revived.listChats()[0].name, 'Study Group');
+});
