@@ -291,17 +291,21 @@ function createWhatsAppClient({
    * for at any time -- which is the difference between "re-pair to fix your
    * chat names" and the widget repairing itself on the next connect.
    *
-   * A full resync (from version 0) is only worth its cost when something is
-   * actually missing, so it is used just while chats are still showing raw
-   * addresses. Once names are learned this settles into the cheap incremental
-   * form, and eventually into a no-op.
+   * Always requested as a NON-initial sync, even though an initial one pulls
+   * more. Baileys attaches a conditional to every chats.update it derives from
+   * an initial sync (Utils/chat-utils.js, getChatUpdateConditional): the
+   * update is only released if that chat also appears in the *same* event
+   * buffer batch as a history set or chat upsert, and is otherwise held
+   * forever. A resync issued after the history sync is its own batch, so every
+   * archive flag was being swallowed and the account looked as though it had
+   * nothing archived at all. With isInitialSync false there is no conditional
+   * and the updates arrive.
    */
   async function resyncMetadata() {
     if (!sock || typeof sock.resyncAppState !== 'function') return;
 
-    const unnamed = store.listChats().some((chat) => chat.name === chat.jid);
     try {
-      await sock.resyncAppState(baileys.ALL_WA_PATCH_NAMES, unnamed);
+      await sock.resyncAppState(baileys.ALL_WA_PATCH_NAMES, false);
     } catch (err) {
       // Not fatal: the connection is fine, the widget just keeps whatever
       // names and archive flags it already had.

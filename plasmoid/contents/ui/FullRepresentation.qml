@@ -166,6 +166,20 @@ Item {
                 }
 
                 PlasmaComponents.MenuItem {
+                    icon.name: "archive-symbolic"
+                    text: i18nc("@action:inmenu", "Archived chats")
+                    // The archive row above the list is the usual way in, but
+                    // it only appears when there is something archived; this
+                    // is the discoverable one that sits beside its siblings.
+                    enabled: chatPanel.archivedChats.length > 0
+                    onTriggered: {
+                        chatPanel.closeChat();
+                        chatPanel.showHidden = false;
+                        chatPanel.showArchived = true;
+                    }
+                }
+
+                PlasmaComponents.MenuItem {
                     icon.name: "list-remove"
                     text: i18nc("@action:inmenu", "Removed chats")
                     // Only worth offering once something has been removed;
@@ -173,6 +187,7 @@ Item {
                     enabled: chatPanel.hiddenCount > 0
                     onTriggered: {
                         chatPanel.closeChat();
+                        chatPanel.showArchived = false;
                         chatPanel.showHidden = true;
                     }
                 }
