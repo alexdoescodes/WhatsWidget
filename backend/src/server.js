@@ -112,6 +112,17 @@ function createServer({ client, store, authenticator, endpointFile }) {
         return res.end();
       }
 
+      // Local-only removal from the widget's list. Deliberately does NOT
+      // touch WhatsApp: nothing is sent, and the conversation is untouched on
+      // the phone and every other linked device.
+      if (req.method === 'POST' && segments[2] === 'hidden') {
+        const body = await readJsonBody(req);
+        store.setHidden(jid, body.hidden !== false);
+        broadcast({ type: 'chats', unread: store.totalUnread() });
+        res.writeHead(204);
+        return res.end();
+      }
+
       if (req.method === 'POST' && segments[2] === 'read') {
         store.markRead(jid);
         broadcast({ type: 'unread', unread: store.totalUnread() });

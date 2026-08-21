@@ -355,3 +355,56 @@ test('a strong name matching the user own name is left alone', () => {
   assert.strictEqual(store.forgetWeakName('Alex'), 0);
   assert.strictEqual(store.listChats()[0].name, 'Alex');
 });
+
+test('a hidden chat is flagged but kept, so it can come back', () => {
+  const store = createStore();
+  store.addMessage('x@s.whatsapp.net',
+    { id: '1', fromMe: false, text: 'hi', timestamp: 1 }, { incrementUnread: true });
+
+  assert.strictEqual(store.setHidden('x@s.whatsapp.net', true), true);
+  const [chat] = store.listChats();
+  assert.strictEqual(chat.hidden, true);
+  assert.strictEqual(store.getMessages('x@s.whatsapp.net').length, 1,
+    'messages are kept so restoring is lossless');
+
+  store.setHidden('x@s.whatsapp.net', false);
+  assert.strictEqual(store.listChats()[0].hidden, false);
+});
+
+test('a hidden chat does not contribute to the unread badge', () => {
+  const store = createStore();
+  store.addMessage('a@s.whatsapp.net',
+    { id: '1', fromMe: false, text: 'hi', timestamp: 1 }, { incrementUnread: true });
+  store.addMessage('b@s.whatsapp.net',
+    { id: '2', fromMe: false, text: 'yo', timestamp: 2 }, { incrementUnread: true });
+  assert.strictEqual(store.totalUnread(), 2);
+
+  store.setHidden('b@s.whatsapp.net', true);
+  assert.strictEqual(store.totalUnread(), 1);
+});
+
+test('a new message does not resurrect a hidden chat', () => {
+  const store = createStore();
+  store.addMessage('x@s.whatsapp.net', { id: '1', fromMe: false, text: 'hi', timestamp: 1 });
+  store.setHidden('x@s.whatsapp.net', true);
+  store.addMessage('x@s.whatsapp.net',
+    { id: '2', fromMe: false, text: 'again', timestamp: 2 }, { incrementUnread: true });
+
+  assert.strictEqual(store.listChats()[0].hidden, true,
+    'removing a chat has to stick, or removing a busy group is pointless');
+});
+
+test('hiding is remembered across a restart', () => {
+  const store = createStore();
+  store.addMessage('x@s.whatsapp.net', { id: '1', fromMe: false, text: 'hi', timestamp: 1 });
+  store.setHidden('x@s.whatsapp.net', true);
+
+  const revived = createStore();
+  revived.restore(JSON.parse(JSON.stringify(store.snapshot())));
+  assert.strictEqual(revived.listChats()[0].hidden, true);
+});
+
+test('hiding an unknown chat changes nothing', () => {
+  const store = createStore();
+  assert.strictEqual(store.setHidden('nope@s.whatsapp.net', true), false);
+});

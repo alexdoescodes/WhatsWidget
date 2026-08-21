@@ -32,6 +32,10 @@ ColumnLayout {
     // another linked device) and arrives over chats.update. The widget never
     // writes it back, so nothing it does can rearrange the real account.
     property bool showArchived: false
+    // Whether chats the user removed from the widget are being shown, so they
+    // can be put back. Removal is local to this widget -- see the context
+    // menu on a chat row.
+    property bool showHidden: false
 
     spacing: 0
 
@@ -52,13 +56,20 @@ ColumnLayout {
             // still a chat you might be looking for, and having search quietly
             // skip half the account is worse than showing one extra result.
             return panel.backend.chats.filter(function (chat) {
+                if (Boolean(chat.hidden) !== panel.showHidden) return false;
                 return String(chat.name).toLowerCase().indexOf(needle) >= 0;
             });
         }
         return panel.backend.chats.filter(function (chat) {
+            if (panel.showHidden) return Boolean(chat.hidden);
+            if (chat.hidden) return false;
             return Boolean(chat.archived) === panel.showArchived;
         });
     }
+
+    readonly property int hiddenCount: panel.backend.chats.filter(function (chat) {
+        return Boolean(chat.hidden);
+    }).length
 
     readonly property var archivedChats: panel.backend.chats.filter(function (chat) {
         return Boolean(chat.archived);
@@ -74,8 +85,11 @@ ColumnLayout {
 
     // The archive row is pointless while searching, since search already
     // reaches into it.
-    readonly property bool archiveRowVisible: panel.filter.trim().length === 0
-        && (panel.showArchived || panel.archivedChats.length > 0)
+    // The row above the list: the way into the archive, and the way back out
+    // of either sub-list. Pointless while searching, which already spans them.
+    readonly property bool archiveRowVisible: panel.showHidden
+        || (panel.filter.trim().length === 0
+            && (panel.showArchived || panel.archivedChats.length > 0))
 
     /**
      * What to show for a chat with no name.
@@ -213,7 +227,10 @@ ColumnLayout {
             anchors.right: parent.right
             height: visible ? implicitHeight : 0
             visible: panel.archiveRowVisible
-            onClicked: panel.showArchived = !panel.showArchived
+            onClicked: {
+                if (panel.showHidden) panel.showHidden = false;
+                else panel.showArchived = !panel.showArchived;
+            }
 
             contentItem: RowLayout {
                 spacing: panel.rowPadding
@@ -221,7 +238,8 @@ ColumnLayout {
                 Kirigami.Icon {
                     Layout.preferredWidth: Kirigami.Units.iconSizes.small
                     Layout.preferredHeight: Kirigami.Units.iconSizes.small
-                    source: panel.showArchived ? "go-previous" : "archive-symbolic"
+                    source: (panel.showArchived || panel.showHidden)
+                        ? "go-previous" : "archive-symbolic"
                     isMask: true
                     color: Kirigami.Theme.highlightColor
                 }
@@ -229,15 +247,16 @@ ColumnLayout {
                 PlasmaComponents.Label {
                     Layout.fillWidth: true
                     elide: Text.ElideRight
-                    font.bold: panel.showArchived
-                    text: i18n("Archived")
+                    font.bold: panel.showArchived || panel.showHidden
+                    text: panel.showHidden ? i18n("Removed from widget") : i18n("Archived")
                 }
 
                 // Only ever an unread count, never the number of archived
                 // chats: the whole point of archiving is that the chat stops
                 // asking for attention.
                 PlasmaComponents.Label {
-                    visible: !panel.showArchived && panel.archivedUnread > 0
+                    visible: !panel.showArchived && !panel.showHidden
+                        && panel.archivedUnread > 0
                     color: Kirigami.Theme.disabledTextColor
                     text: panel.archivedUnread > 99 ? "99+" : String(panel.archivedUnread)
                 }
@@ -282,6 +301,31 @@ ColumnLayout {
                     rightPadding: panel.rowPadding
 
                     onClicked: panel.openChat(chatDelegate.modelData.jid)
+
+                    // Right-click removes the chat from this widget. Accepts
+                    // only the right button, so the delegate still gets the
+                    // ordinary left click that opens the conversation.
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.RightButton
+                        onClicked: rowMenu.popup()
+                    }
+
+                    PlasmaComponents.Menu {
+                        id: rowMenu
+
+                        PlasmaComponents.MenuItem {
+                            icon.name: panel.showHidden ? "list-add" : "list-remove"
+                            // Deliberately not "Delete": nothing is deleted.
+                            // The conversation stays in WhatsApp and on every
+                            // other device; only this widget stops listing it.
+                            text: panel.showHidden
+                                ? i18nc("@action:inmenu", "Show in widget again")
+                                : i18nc("@action:inmenu", "Remove from widget")
+                            onTriggered: panel.backend.setChatHidden(
+                                chatDelegate.modelData.jid, !panel.showHidden)
+                        }
+                    }
 
                     // The stock ItemDelegate background is replaced so the row
                     // separator can be inset past the avatar, the way the
@@ -422,6 +466,8 @@ ColumnLayout {
             text: {
                 if (panel.filter.trim().length > 0)
                     return i18nc("@info:placeholder", "No chats match “%1”.", panel.filter.trim());
+                if (panel.showHidden)
+                    return i18nc("@info:placeholder", "No removed chats.");
                 if (panel.showArchived)
                     return i18nc("@info:placeholder", "No archived chats.");
                 return i18nc("@info:placeholder", "No chats yet.");

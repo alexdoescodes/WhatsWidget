@@ -164,6 +164,18 @@ Item {
                     text: i18nc("@action:inmenu", "Hide panel")
                     onTriggered: root.hide()
                 }
+
+                PlasmaComponents.MenuItem {
+                    icon.name: "list-remove"
+                    text: i18nc("@action:inmenu", "Removed chats")
+                    // Only worth offering once something has been removed;
+                    // right-clicking a chat row is what puts things here.
+                    enabled: chatPanel.hiddenCount > 0
+                    onTriggered: {
+                        chatPanel.closeChat();
+                        chatPanel.showHidden = true;
+                    }
+                }
             }
         }
 

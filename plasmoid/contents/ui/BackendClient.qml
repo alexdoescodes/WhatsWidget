@@ -216,6 +216,23 @@ QtObject {
         request("POST", "/chats/" + encodeURIComponent(jid) + "/messages", { text: text }, callback);
     }
 
+    /**
+     * Remove a chat from this widget's list, or put it back.
+     *
+     * Local to the widget: nothing is sent to WhatsApp, and the conversation
+     * is untouched on the phone and every other linked device.
+     */
+    function setChatHidden(jid, hidden) {
+        request("POST", "/chats/" + encodeURIComponent(jid) + "/hidden",
+                { hidden: hidden }, function (err) {
+            // On failure the list is already correct, since it still reflects
+            // the backend. The push that follows a success refreshes it.
+            if (err) return;
+            client.refreshStatus();
+            client.refreshChats();
+        });
+    }
+
     function markRead(jid) {
         request("POST", "/chats/" + encodeURIComponent(jid) + "/read", {}, function (err) {
             // The mark did not happen, so there is no new unread count to go

@@ -124,6 +124,9 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
         unread: 0,
         lastMessageAt: 0,
         archived: false,
+        // Removed from the widget's list by the user. Purely local: the
+        // conversation is untouched in WhatsApp and on every other device.
+        hidden: false,
         messages: [],
       };
       chats.set(jid, chat);
@@ -200,6 +203,22 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     return chat;
   }
 
+  /**
+   * Remove a chat from the widget's list, or put it back.
+   *
+   * Local only -- nothing is sent to WhatsApp and the conversation is
+   * untouched everywhere else. The chat and its messages are kept so it can
+   * be restored, and so a hidden chat does not silently reappear as a new one
+   * the next time somebody writes in it.
+   */
+  function setHidden(rawJid, hidden) {
+    const chat = chats.get(canonical(rawJid));
+    if (!chat || chat.hidden === Boolean(hidden)) return false;
+    chat.hidden = Boolean(hidden);
+    revision += 1;
+    return true;
+  }
+
   function markRead(rawJid) {
     const chat = chats.get(canonical(rawJid));
     if (chat && chat.unread !== 0) {
@@ -244,7 +263,7 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
   function totalUnread() {
     let total = 0;
     for (const chat of chats.values()) {
-      if (!chat.archived) total += chat.unread;
+      if (!chat.archived && !chat.hidden) total += chat.unread;
     }
     return total;
   }
@@ -324,6 +343,7 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
         unread: Number.isFinite(chat.unread) && chat.unread > 0 ? chat.unread : 0,
         lastMessageAt: Number.isFinite(chat.lastMessageAt) ? chat.lastMessageAt : 0,
         archived: chat.archived === true,
+        hidden: chat.hidden === true,
         messages: messages.slice(-maxMessagesPerChat),
       });
     }
@@ -336,6 +356,7 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
   return {
     addMessage,
     upsertChat,
+    setHidden,
     recordContactName,
     forgetWeakName,
     linkIdentity,
