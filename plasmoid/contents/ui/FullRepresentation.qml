@@ -10,10 +10,14 @@ Item {
     // an implicit context property when loading a representation.
     readonly property var backend: root.backend
 
-    Layout.minimumWidth: Kirigami.Units.gridUnit * 20
-    Layout.minimumHeight: Kirigami.Units.gridUnit * 24
-    Layout.preferredWidth: Kirigami.Units.gridUnit * 24
-    Layout.preferredHeight: Kirigami.Units.gridUnit * 28
+    // Sized for a compact chat tile on the desktop rather than a full window:
+    // at the usual gridUnit of 18 this is a 234x288 floor and a 270x360
+    // default. The floor still has to fit a readable chat row plus the tab
+    // bar, so it is not lowered further.
+    Layout.minimumWidth: Kirigami.Units.gridUnit * 13
+    Layout.minimumHeight: Kirigami.Units.gridUnit * 16
+    Layout.preferredWidth: Kirigami.Units.gridUnit * 15
+    Layout.preferredHeight: Kirigami.Units.gridUnit * 20
 
     ColumnLayout {
         anchors.fill: parent
