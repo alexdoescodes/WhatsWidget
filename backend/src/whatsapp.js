@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('node:fs');
 const { EventEmitter } = require('node:events');
 const baileys = require('baileys');
 const QRCode = require('qrcode');
@@ -107,6 +108,15 @@ function createWhatsAppClient({
           const code = lastDisconnect?.error?.output?.statusCode;
           if (code === DisconnectReason.loggedOut) {
             // Session revoked from the phone: fall back to pairing.
+            //
+            // The stored credentials MUST go with it. They are already dead
+            // server-side, but useMultiFileAuthState will happily load them
+            // again, and Baileys only offers a QR when it has no credentials
+            // to try -- with these still on disk it retries "logging in..."
+            // against a revoked session forever and no QR is ever produced.
+            // The widget then sits on "needs-pairing" with /qr returning 404,
+            // which is indistinguishable from a hang.
+            clearSession();
             qrPng = null;
             setStatus('needs-pairing');
           } else {
@@ -204,6 +214,23 @@ function createWhatsAppClient({
       });
     } finally {
       starting = false;
+    }
+  }
+
+  /**
+   * Throws away the stored credentials so the next connection starts from
+   * scratch and WhatsApp issues a pairing QR.
+   *
+   * Only ever called when WhatsApp itself has told us the session is revoked.
+   * Never on an ordinary disconnect -- deleting credentials because the wifi
+   * dropped would force a re-pair for a blip.
+   */
+  function clearSession() {
+    try {
+      fs.rmSync(sessionDir, { recursive: true, force: true });
+      fs.mkdirSync(sessionDir, { recursive: true });
+    } catch (err) {
+      logger.error('could not clear the revoked session:', err.message);
     }
   }
 

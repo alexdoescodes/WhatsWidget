@@ -1,6 +1,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { EventEmitter } = require('node:events');
 const { createWhatsAppClient, extractText } = require('../src/whatsapp');
 const { createStore } = require('../src/store');
@@ -157,4 +160,60 @@ test('logged-out close goes to needs-pairing, not disconnected', async () => {
   // from build()) even on a logged-out close; let it flush before the
   // test ends so no timer is left dangling.
   await new Promise((r) => setTimeout(r, 20));
+});
+
+test('a revoked session is cleared from disk so a QR can be issued', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-session-'));
+  fs.writeFileSync(path.join(dir, 'creds.json'), '{"me":"stale"}');
+  fs.writeFileSync(path.join(dir, 'app-state-sync-key-A.json'), '{}');
+
+  const sock = fakeSocket();
+  const client = createWhatsAppClient({
+    sessionDir: dir,
+    store: createStore(),
+    makeSocket: () => sock,
+    authState: async () => ({ state: {}, saveCreds: async () => {} }),
+    reconnectDelayMs: 10000,
+  });
+  await client.start();
+
+  assert.strictEqual(fs.readdirSync(dir).length, 2, 'precondition: credentials on disk');
+
+  sock.ev.emit('connection.update', {
+    connection: 'close',
+    lastDisconnect: { error: { output: { statusCode: DisconnectReason.loggedOut } } },
+  });
+
+  assert.strictEqual(client.getStatus(), 'needs-pairing');
+  assert.strictEqual(fs.readdirSync(dir).length, 0,
+    'revoked credentials must be gone, or Baileys retries them instead of offering a QR');
+  assert.ok(fs.existsSync(dir), 'the directory itself must survive for the next pairing');
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('an ordinary disconnect leaves the credentials alone', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wa-session-'));
+  fs.writeFileSync(path.join(dir, 'creds.json'), '{"me":"good"}');
+
+  const sock = fakeSocket();
+  const client = createWhatsAppClient({
+    sessionDir: dir,
+    store: createStore(),
+    makeSocket: () => sock,
+    authState: async () => ({ state: {}, saveCreds: async () => {} }),
+    reconnectDelayMs: 10000,
+  });
+  await client.start();
+
+  sock.ev.emit('connection.update', {
+    connection: 'close',
+    lastDisconnect: { error: { output: { statusCode: 500 } } },
+  });
+
+  assert.strictEqual(client.getStatus(), 'disconnected');
+  assert.ok(fs.existsSync(path.join(dir, 'creds.json')),
+    'a dropped connection must not force a re-pair');
+
+  fs.rmSync(dir, { recursive: true, force: true });
 });
