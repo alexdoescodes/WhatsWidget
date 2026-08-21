@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { createWhatsAppClient, extractText } = require('../src/whatsapp');
+const { createWhatsAppClient, extractText, isConversation } = require('../src/whatsapp');
 const { createStore } = require('../src/store');
 const { DisconnectReason } = require('baileys');
 
@@ -216,4 +216,14 @@ test('an ordinary disconnect leaves the credentials alone', async () => {
     'a dropped connection must not force a re-pair');
 
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('Channels are conversations; the status carousel is not', () => {
+  assert.strictEqual(isConversation('120363169319669622@newsletter'), true);
+  assert.strictEqual(isConversation('4917@s.whatsapp.net'), true);
+  assert.strictEqual(isConversation('86247305392309@lid'), true);
+  assert.strictEqual(isConversation('x@g.us'), true);
+  assert.strictEqual(isConversation('status@broadcast'), false);
+  assert.strictEqual(isConversation(''), false);
+  assert.strictEqual(isConversation(undefined), false);
 });

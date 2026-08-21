@@ -35,15 +35,22 @@ function toNumber(value) {
 /**
  * Whether a jid is a conversation the panel should list.
  *
- * Newsletters (WhatsApp Channels) and the status broadcast arrive in history
- * sync alongside real chats, but they are feeds rather than conversations and
- * carry no name we ever fetch -- listed, they show up as a bare
+ * Newsletters (WhatsApp Channels) count: they are followed feeds that sit in
+ * the chat list like anything else. Their names are not in history sync
+ * though, so they need resolveNewsletterNames() or they render as a bare
  * 120363...@newsletter row.
+ *
+ * The status broadcast does not count -- that is the Status carousel, not a
+ * conversation.
  */
 function isConversation(jid) {
   if (typeof jid !== 'string' || !jid) return false;
   if (jid === 'status@broadcast') return false;
-  return !jid.endsWith('@newsletter') && !jid.endsWith('@broadcast');
+  return !jid.endsWith('@broadcast');
+}
+
+function isNewsletter(jid) {
+  return typeof jid === 'string' && jid.endsWith('@newsletter');
 }
 
 /** The best display name a contact record offers, in descending trust. */
@@ -116,6 +123,7 @@ function createWhatsAppClient({
           // does not depend on a sync arriving. Without it a group only ever
           // gets the pushName of whoever last spoke in it.
           fetchGroups();
+          resolveNewsletterNames();
         }
 
         if (connection === 'close') {
@@ -192,6 +200,7 @@ function createWhatsAppClient({
         }
 
         events.emit('chats');
+        resolveNewsletterNames();
       });
 
       // Archive/unarchive and rename arrive here, both from the phone and from
@@ -256,6 +265,38 @@ function createWhatsAppClient({
       changed = changed || ids.length > 0;
     }
     return changed;
+  }
+
+  /**
+   * Fills in the names of followed Channels.
+   *
+   * Newsletter names come from neither history sync nor the contact list, so
+   * each one has to be asked for by jid. Only ever asks about Channels that
+   * are still showing a raw address, so a name learned once is not re-fetched
+   * and the work shrinks to nothing on a settled account.
+   */
+  async function resolveNewsletterNames(limit = 50) {
+    if (!sock || typeof sock.newsletterMetadata !== 'function') return;
+
+    const pending = store.listChats()
+      .filter((chat) => isNewsletter(chat.jid) && chat.name === chat.jid)
+      .slice(0, limit);
+    if (pending.length === 0) return;
+
+    let changed = false;
+    for (const chat of pending) {
+      try {
+        const meta = await sock.newsletterMetadata('jid', chat.jid);
+        if (meta?.name) {
+          store.upsertChat(chat.jid, { name: meta.name });
+          changed = true;
+        }
+      } catch {
+        // A Channel since deleted, or a request that timed out. It keeps its
+        // raw id and gets another chance on the next connect.
+      }
+    }
+    if (changed) events.emit('chats');
   }
 
   /**
