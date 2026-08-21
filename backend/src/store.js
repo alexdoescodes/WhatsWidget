@@ -43,10 +43,26 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     if (chat) chat.unread = 0;
   }
 
+  /**
+   * Chat metadata, newest first, plus a one-line preview of the newest
+   * message.
+   *
+   * The message bodies still do not come along — only the last message's text
+   * and its direction, which is exactly what the panel's preview line renders.
+   * `messages` is already capped by addMessage, so the "last" here is the last
+   * one the store still holds, never an evicted older one.
+   */
   function listChats() {
     return [...chats.values()]
       .sort((a, b) => b.lastMessageAt - a.lastMessageAt)
-      .map(({ messages, ...meta }) => meta);
+      .map(({ messages, ...meta }) => {
+        const last = messages.length > 0 ? messages[messages.length - 1] : null;
+        return {
+          ...meta,
+          lastMessageText: last && last.text ? last.text : '',
+          lastMessageFromMe: last ? Boolean(last.fromMe) : false,
+        };
+      });
   }
 
   function getMessages(jid) {
