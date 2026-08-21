@@ -50,7 +50,17 @@ upgrade require *both* a loopback peer address *and* `Authorization: Bearer <tok
 (The one exception: the WebSocket upgrade also accepts `?token=`, because QML's `WebSocket`
 cannot set request headers. That query form is accepted on the upgrade path **only**.)
 
-Nothing is persisted except the WhatsApp session directory and one plasmoid config key.
+Two things are persisted: the WhatsApp session directory and a chat cache at
+`~/.local/share/whatsapp-widget/chats.json` (mode `0600`).
+
+The cache exists because **WhatsApp only hands over history when a device is linked.**
+Without it, every restart — a reboot, a logout, a crash — leaves an empty chat list that
+can only be refilled by unlinking the device and scanning a QR again. It holds message
+text, which is worth knowing; it sits beside the session directory, which is a strictly
+more powerful secret, since anyone holding that can read every message live and send as
+you. Delete `chats.json` at any time to clear it; the widget refills what it can.
+
+Beyond those, only one plasmoid config key.
 Chats and messages live in a bounded in-memory store (200 chats, 50 messages each) that is
 discarded when the backend stops.
 

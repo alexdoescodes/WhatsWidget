@@ -22,8 +22,15 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
   // real chats under hundreds of empty entries.
   const contactNames = new Map();
 
+  // Bumped by every mutation so a persistence layer can tell whether anything
+  // is worth writing, without diffing the whole store or saving on a timer
+  // regardless.
+  let revision = 0;
+
   function recordContactName(jid, name) {
     if (!jid || !name) return;
+    if (contactNames.get(jid) === name) return;
+    revision += 1;
     contactNames.set(jid, name);
     // Apply it to a conversation that arrived before the name did and is
     // still falling back to showing a raw address.
@@ -84,6 +91,7 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     }
     if (message.timestamp > chat.lastMessageAt) chat.lastMessageAt = message.timestamp;
     if (incrementUnread) chat.unread += 1;
+    revision += 1;
     // After the timestamp is current, never before: a brand new chat still
     // carries lastMessageAt 0 at the top of this function and would be the
     // first thing thrown away by its own insertion.
@@ -109,13 +117,17 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     if (Number.isFinite(lastMessageAt) && lastMessageAt > chat.lastMessageAt) {
       chat.lastMessageAt = lastMessageAt;
     }
+    revision += 1;
     prune();
     return chat;
   }
 
   function markRead(jid) {
     const chat = chats.get(jid);
-    if (chat) chat.unread = 0;
+    if (chat && chat.unread !== 0) {
+      chat.unread = 0;
+      revision += 1;
+    }
   }
 
   /**
@@ -159,6 +171,51 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     return total;
   }
 
+  /**
+   * Everything worth keeping across a restart, as plain JSON-able data.
+   *
+   * History only ever arrives when a device is linked, so without this a
+   * restart means the chat list is empty until someone happens to message
+   * you -- and getting it back means unlinking and scanning a QR again.
+   */
+  function snapshot() {
+    return {
+      version: 1,
+      chats: [...chats.values()],
+      contactNames: [...contactNames.entries()],
+    };
+  }
+
+  /** Replace the contents from a snapshot, re-applying both caps. */
+  function restore(data) {
+    if (!data || data.version !== 1 || !Array.isArray(data.chats)) return false;
+
+    chats.clear();
+    contactNames.clear();
+
+    for (const entry of data.contactNames || []) {
+      if (Array.isArray(entry) && entry[0] && entry[1]) contactNames.set(entry[0], entry[1]);
+    }
+
+    for (const chat of data.chats) {
+      if (!chat || typeof chat.jid !== 'string') continue;
+      const messages = Array.isArray(chat.messages) ? chat.messages.slice() : [];
+      messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+      chats.set(chat.jid, {
+        jid: chat.jid,
+        name: typeof chat.name === 'string' && chat.name ? chat.name : chat.jid,
+        unread: Number.isFinite(chat.unread) && chat.unread > 0 ? chat.unread : 0,
+        lastMessageAt: Number.isFinite(chat.lastMessageAt) ? chat.lastMessageAt : 0,
+        archived: chat.archived === true,
+        messages: messages.slice(-maxMessagesPerChat),
+      });
+    }
+
+    prune();
+    revision += 1;
+    return true;
+  }
+
   return {
     addMessage,
     upsertChat,
@@ -167,6 +224,9 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     listChats,
     getMessages,
     totalUnread,
+    snapshot,
+    restore,
+    getRevision: () => revision,
   };
 }
 

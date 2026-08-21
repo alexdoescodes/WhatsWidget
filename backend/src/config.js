@@ -17,6 +17,8 @@ function buildConfig(env = process.env, homedir = os.homedir(), uid = process.ge
     dataDir,
     sessionDir: path.join(dataDir, 'session'),
     endpointFile: path.join(runtimeDir, 'whatsapp-widget-endpoint.json'),
+    // Chat cache. Holds message text, so it is written 0600 -- see persist.js.
+    storeFile: path.join(dataDir, 'chats.json'),
     // Dedicated PAM service: see plan Global Constraints. Never 'login'.
     pamService: 'whatsapp-widget',
     maxMessagesPerChat: 50,

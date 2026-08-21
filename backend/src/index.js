@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const { buildConfig } = require('./config');
 const { createStore } = require('./store');
+const { createPersistence } = require('./persist');
 const { createAuthenticator } = require('./auth-pam');
 const { createWhatsAppClient } = require('./whatsapp');
 const { createServer } = require('./server');
@@ -15,6 +16,12 @@ async function main() {
     maxMessagesPerChat: config.maxMessagesPerChat,
     maxChats: config.maxChats,
   });
+  // Load before the socket connects, so the widget has the previous chat list
+  // immediately instead of an empty panel that fills in only if a sync lands.
+  const persistence = createPersistence({ file: config.storeFile, store });
+  persistence.load();
+  persistence.start();
+
   const authenticator = createAuthenticator({ service: config.pamService });
   const client = createWhatsAppClient({ sessionDir: config.sessionDir, store });
   const server = createServer({ client, store, authenticator, endpointFile: config.endpointFile });
@@ -25,6 +32,10 @@ async function main() {
   await client.start();
 
   const shutdown = async () => {
+    persistence.stop();
+    // Final flush: the interval may be up to 10s stale, and everything learned
+    // in that window would otherwise need another device link to recover.
+    persistence.save();
     await server.close();
     process.exit(0);
   };

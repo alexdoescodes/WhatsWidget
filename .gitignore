@@ -24,6 +24,9 @@ session/
 **/whatsapp-widget/session/
 *whatsapp-widget-endpoint.json
 creds.json
+# The chat cache: message text at rest. Lives in ~/.local/share by default.
+chats.json
+chats.json.tmp
 app-state-sync-*.json
 pre-key-*.json
 sender-key-*.json
