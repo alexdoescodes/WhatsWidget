@@ -66,6 +66,7 @@ function contactName(contact) {
 function createWhatsAppClient({
   sessionDir,
   store,
+  avatars = null,
   makeSocket = baileys.default,
   authState = (dir) => useMultiFileAuthState(dir),
   qrToBuffer = (text) => QRCode.toBuffer(text, { margin: 1, width: 320 }),
@@ -133,6 +134,7 @@ function createWhatsAppClient({
           fetchGroups();
           resolveNewsletterNames();
           resyncMetadata();
+          fetchAvatars();
         }
 
         if (connection === 'close') {
@@ -197,6 +199,9 @@ function createWhatsAppClient({
           store.upsertChat(chat.id, {
             name: chat.name || undefined,
             archived: typeof chat.archived === 'boolean' ? chat.archived : undefined,
+            // `pinned` is the timestamp it was pinned at, absent or 0 when not.
+            pinned: chat.pinned === undefined || chat.pinned === null
+              ? undefined : Boolean(toNumber(chat.pinned)),
             unread: toNumber(chat.unreadCount),
             lastMessageAt: toNumber(chat.conversationTimestamp),
           });
@@ -217,6 +222,7 @@ function createWhatsAppClient({
 
         events.emit('chats');
         resolveNewsletterNames();
+        fetchAvatars();
       });
 
       // Archive/unarchive and rename arrive here, both from the phone and from
@@ -228,6 +234,8 @@ function createWhatsAppClient({
           store.upsertChat(chat.id, {
             name: chat.name || undefined,
             archived: typeof chat.archived === 'boolean' ? chat.archived : undefined,
+            pinned: chat.pinned === undefined || chat.pinned === null
+              ? undefined : Boolean(toNumber(chat.pinned)),
             unread: toNumber(chat.unreadCount),
             lastMessageAt: toNumber(chat.conversationTimestamp),
           });
@@ -281,6 +289,31 @@ function createWhatsAppClient({
       changed = changed || ids.length > 0;
     }
     return changed;
+  }
+
+  /**
+   * Caches profile pictures for the chats most likely to be on screen.
+   *
+   * Bounded per pass and worked newest-first: an account with hundreds of
+   * chats must not turn a reconnect into hundreds of downloads. Anything
+   * already cached is skipped, so this converges and then costs nothing. A
+   * contact with no picture, or one hidden by privacy settings, simply keeps
+   * its letter avatar.
+   */
+  async function fetchAvatars(limit = 40) {
+    if (!avatars) return;
+
+    const pending = store.listChats()
+      .filter((chat) => !chat.avatar && !chat.hidden)
+      .slice(0, limit);
+    if (pending.length === 0) return;
+
+    let changed = false;
+    for (const chat of pending) {
+      const file = await avatars.ensure(chat.jid);
+      if (file && store.setAvatar(chat.jid, file)) changed = true;
+    }
+    if (changed) events.emit('chats');
   }
 
   /**
@@ -392,6 +425,15 @@ function createWhatsAppClient({
     events,
     start,
     sendMessage,
+    /**
+     * The URL of a contact's profile picture, or '' when there is none.
+     * Thin passthrough: the socket is private to this module, and the avatar
+     * cache needs a way to ask without being handed the whole connection.
+     */
+    profilePictureUrl: async (jid, type = 'preview') => {
+      if (!sock || typeof sock.profilePictureUrl !== 'function') return '';
+      return (await sock.profilePictureUrl(jid, type)) || '';
+    },
     getStatus: () => status,
     getQrPng: () => qrPng,
   };

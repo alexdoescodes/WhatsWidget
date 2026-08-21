@@ -2,24 +2,30 @@ import QtQuick
 import org.kde.kirigami as Kirigami
 
 /**
- * The stand-in for a profile picture: the chat's initial on a coloured disc.
+ * A chat's profile picture, or the chat's initial on a coloured disc when
+ * there is none.
  *
- * There are no avatars in this system. The backend's chat records are exactly
- * {jid, name, unread, lastMessageAt, lastMessageText, lastMessageFromMe} —
- * no picture, no URL, nothing to fetch one with. Fetching them would mean new
- * backend work *and* pulling personal images of the user's contacts onto disk
- * for a decoration, which is not a trade this widget makes. So the disc is
- * generated, never downloaded.
+ * The picture is a local file the backend has already downloaded and cached
+ * (see backend/src/avatars.js); this loads it over file://. It is never a
+ * remote URL: the widget makes no network requests of its own, and a WhatsApp
+ * media URL in an Image would be exactly that.
  *
- * The colour is a pure function of the JID, so a chat keeps the same disc for
- * as long as it exists and across restarts, and two chats do not swap colours
- * when the list reorders.
+ * The disc remains the answer for every chat without one — a contact who has
+ * no picture, one whose privacy settings hide it, a group with no icon, or a
+ * picture that has not been fetched yet. Its colour is a pure function of the
+ * JID, so a chat keeps the same disc for as long as it exists and across
+ * restarts, and two chats do not swap colours when the list reorders.
  */
 Rectangle {
     id: avatar
 
     required property string jid
     required property string name
+    // Absolute path to a cached picture, or "" for none.
+    property string source: ""
+
+    readonly property bool hasPicture: avatar.source !== ""
+        && picture.status === Image.Ready
 
     /**
      * A stable 31-based string hash of the JID. `| 0` keeps it in int32 so a
@@ -64,8 +70,29 @@ Rectangle {
         return Qt.hsla(hue / 360, 0.45, 0.52, 1.0);
     }
 
+    // Kirigami.ShadowedImage rather than an Image under a mask: it rounds the
+    // corners in the scene graph, so there is no user shader, no
+    // ShaderEffectSource per row, and nothing that re-renders when the list
+    // scrolls. Measured first: a Rectangle with `radius` and `clip: true`
+    // does NOT clip to the rounded shape (the corners stay square), and
+    // MultiEffect masking could not be verified offscreen at all — it hung
+    // the harness — which is the same unreliability that got MultiEffect
+    // removed from this widget once already.
+    Kirigami.ShadowedImage {
+        id: picture
+
+        anchors.fill: parent
+        radius: width / 2
+        source: avatar.source === "" ? "" : "file://" + avatar.source
+        // The cached files are small previews; decode at the size drawn.
+        sourceSize.width: avatar.width
+        sourceSize.height: avatar.height
+        visible: avatar.hasPicture
+    }
+
     Text {
         anchors.centerIn: parent
+        visible: !avatar.hasPicture
         text: avatar.initial
         // White, not Theme.textColor: the disc behind it is a mid-lightness
         // colour of our own choosing, and the scheme's text colour is black

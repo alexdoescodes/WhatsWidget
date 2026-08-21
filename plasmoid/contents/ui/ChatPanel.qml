@@ -363,19 +363,40 @@ ColumnLayout {
                             jid: chatDelegate.modelData.jid
                             name: panel.displayName(chatDelegate.modelData.jid,
                                                     chatDelegate.modelData.name)
+                            // "" for a contact with no picture, one hidden by
+                            // privacy settings, or one not fetched yet — the
+                            // letter disc covers all three.
+                            source: chatDelegate.modelData.avatar || ""
                         }
 
                         ColumnLayout {
                             Layout.fillWidth: true
                             spacing: 0
 
-                            PlasmaComponents.Label {
+                            RowLayout {
                                 Layout.fillWidth: true
-                                elide: Text.ElideRight
-                                maximumLineCount: 1
-                                font.bold: true
-                                text: panel.displayName(chatDelegate.modelData.jid,
-                                                        chatDelegate.modelData.name)
+                                spacing: Kirigami.Units.smallSpacing
+
+                                PlasmaComponents.Label {
+                                    Layout.fillWidth: true
+                                    elide: Text.ElideRight
+                                    maximumLineCount: 1
+                                    font.bold: true
+                                    text: panel.displayName(chatDelegate.modelData.jid,
+                                                            chatDelegate.modelData.name)
+                                }
+
+                                // Pinned in WhatsApp itself. Read-only here:
+                                // the widget shows the state and sorts by it,
+                                // but never writes it back to the account.
+                                Kirigami.Icon {
+                                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                                    visible: chatDelegate.modelData.pinned === true
+                                    source: "pin"
+                                    isMask: true
+                                    color: Kirigami.Theme.disabledTextColor
+                                }
                             }
 
                             RowLayout {

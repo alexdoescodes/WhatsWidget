@@ -17,6 +17,9 @@ function buildConfig(env = process.env, homedir = os.homedir(), uid = process.ge
     dataDir,
     sessionDir: path.join(dataDir, 'session'),
     endpointFile: path.join(runtimeDir, 'whatsapp-widget-endpoint.json'),
+    // Cached profile pictures, 0700. Loaded by the widget over file://, since
+    // QML's Image cannot send the bearer header -- see avatars.js.
+    avatarDir: path.join(dataDir, 'avatars'),
     // Chat cache. Holds message text, so it is written 0600 -- see persist.js.
     storeFile: path.join(dataDir, 'chats.json'),
     // Dedicated PAM service: see plan Global Constraints. Never 'login'.

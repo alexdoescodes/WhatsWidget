@@ -124,6 +124,10 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
         unread: 0,
         lastMessageAt: 0,
         archived: false,
+        // Pinned in WhatsApp itself; sorted to the top like every other client.
+        pinned: false,
+        // Absolute path to a cached profile picture, or '' when there is none.
+        avatar: '',
         // Removed from the widget's list by the user. Purely local: the
         // conversation is untouched in WhatsApp and on every other device.
         hidden: false,
@@ -188,12 +192,13 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
    * later partial update (an archive toggle, say) cannot blank a name that a
    * fuller event already established.
    */
-  function upsertChat(jid, { name, archived, unread, lastMessageAt } = {}) {
+  function upsertChat(jid, { name, archived, pinned, unread, lastMessageAt } = {}) {
     const chat = touch(jid, name);
     if (!name && chat.name === jid && contactNames.has(jid)) {
       chat.name = contactNames.get(jid);
     }
     if (typeof archived === 'boolean') chat.archived = archived;
+    if (typeof pinned === 'boolean') chat.pinned = pinned;
     if (Number.isFinite(unread) && unread >= 0) chat.unread = unread;
     if (Number.isFinite(lastMessageAt) && lastMessageAt > chat.lastMessageAt) {
       chat.lastMessageAt = lastMessageAt;
@@ -211,6 +216,15 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
    * be restored, and so a hidden chat does not silently reappear as a new one
    * the next time somebody writes in it.
    */
+  /** Record where a chat's cached profile picture lives on disk. */
+  function setAvatar(rawJid, path) {
+    const chat = chats.get(canonical(rawJid));
+    if (!chat || chat.avatar === path) return false;
+    chat.avatar = path || '';
+    revision += 1;
+    return true;
+  }
+
   function setHidden(rawJid, hidden) {
     const chat = chats.get(canonical(rawJid));
     if (!chat || chat.hidden === Boolean(hidden)) return false;
@@ -238,7 +252,8 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
    */
   function listChats() {
     return [...chats.values()]
-      .sort((a, b) => b.lastMessageAt - a.lastMessageAt)
+      // Pinned first, as every other WhatsApp client does it, then by recency.
+      .sort((a, b) => (Number(b.pinned) - Number(a.pinned)) || (b.lastMessageAt - a.lastMessageAt))
       .map(({ messages, ...meta }) => {
         const last = messages.length > 0 ? messages[messages.length - 1] : null;
         return {
@@ -343,6 +358,8 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
         unread: Number.isFinite(chat.unread) && chat.unread > 0 ? chat.unread : 0,
         lastMessageAt: Number.isFinite(chat.lastMessageAt) ? chat.lastMessageAt : 0,
         archived: chat.archived === true,
+        pinned: chat.pinned === true,
+        avatar: typeof chat.avatar === 'string' ? chat.avatar : '',
         hidden: chat.hidden === true,
         messages: messages.slice(-maxMessagesPerChat),
       });
@@ -356,6 +373,7 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
   return {
     addMessage,
     upsertChat,
+    setAvatar,
     setHidden,
     recordContactName,
     forgetWeakName,
