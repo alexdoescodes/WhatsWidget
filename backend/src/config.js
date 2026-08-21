@@ -20,7 +20,11 @@ function buildConfig(env = process.env, homedir = os.homedir(), uid = process.ge
     // Dedicated PAM service: see plan Global Constraints. Never 'login'.
     pamService: 'whatsapp-widget',
     maxMessagesPerChat: 50,
-    maxChats: 200,
+    // Raised from 200 once history sync started delivering whole accounts at
+    // once. Chat metadata is tiny; the memory that matters is messages, and
+    // that is still capped per chat, so the worst case is roughly
+    // maxChats * maxMessagesPerChat message objects.
+    maxChats: 500,
   };
 }
 

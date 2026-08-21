@@ -67,3 +67,61 @@ test('the preview follows the message cap rather than the evicted head', () => {
   assert.strictEqual(s.listChats()[0].lastMessageText, 'm4');
   assert.strictEqual(s.getMessages('a').length, 2);
 });
+
+test('upsertChat records archive state without a message', () => {
+  const store = createStore();
+  store.upsertChat('a@s.whatsapp.net', { name: 'Laura', archived: true, lastMessageAt: 40 });
+  const [chat] = store.listChats();
+  assert.strictEqual(chat.name, 'Laura');
+  assert.strictEqual(chat.archived, true);
+  assert.strictEqual(chat.lastMessageAt, 40);
+});
+
+test('a partial update cannot blank a name an earlier event established', () => {
+  const store = createStore();
+  store.upsertChat('a@s.whatsapp.net', { name: 'Laura' });
+  store.upsertChat('a@s.whatsapp.net', { archived: true });
+  const [chat] = store.listChats();
+  assert.strictEqual(chat.name, 'Laura');
+  assert.strictEqual(chat.archived, true);
+});
+
+test('archived chats are excluded from the unread badge', () => {
+  const store = createStore();
+  store.addMessage('a@s.whatsapp.net', { id: '1', fromMe: false, text: 'hi', timestamp: 1 },
+    { incrementUnread: true });
+  store.addMessage('b@s.whatsapp.net', { id: '2', fromMe: false, text: 'yo', timestamp: 2 },
+    { incrementUnread: true });
+  assert.strictEqual(store.totalUnread(), 2);
+  store.upsertChat('b@s.whatsapp.net', { archived: true });
+  assert.strictEqual(store.totalUnread(), 1);
+});
+
+test('archiving survives a later message in that chat', () => {
+  const store = createStore();
+  store.upsertChat('a@s.whatsapp.net', { archived: true });
+  store.addMessage('a@s.whatsapp.net', { id: '1', fromMe: false, text: 'hi', timestamp: 5 },
+    { incrementUnread: true });
+  const [chat] = store.listChats();
+  assert.strictEqual(chat.archived, true);
+});
+
+test('eviction drops the least recently active chat, not the first inserted', () => {
+  // History sync delivers newest first. Under the old insertion-order
+  // eviction that made the newest chats the first ones thrown away.
+  const store = createStore({ maxChats: 2 });
+  store.upsertChat('newest@s.whatsapp.net', { lastMessageAt: 300 });
+  store.upsertChat('middle@s.whatsapp.net', { lastMessageAt: 200 });
+  store.upsertChat('oldest@s.whatsapp.net', { lastMessageAt: 100 });
+  const jids = store.listChats().map((c) => c.jid);
+  assert.deepStrictEqual(jids, ['newest@s.whatsapp.net', 'middle@s.whatsapp.net']);
+});
+
+test('a brand new chat is not evicted by its own zero timestamp', () => {
+  const store = createStore({ maxChats: 1 });
+  store.upsertChat('old@s.whatsapp.net', { lastMessageAt: 100 });
+  store.addMessage('new@s.whatsapp.net', { id: '1', fromMe: false, text: 'hi', timestamp: 500 },
+    { incrementUnread: true });
+  const jids = store.listChats().map((c) => c.jid);
+  assert.deepStrictEqual(jids, ['new@s.whatsapp.net']);
+});

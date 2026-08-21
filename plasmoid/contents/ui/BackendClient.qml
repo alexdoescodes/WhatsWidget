@@ -271,6 +271,12 @@ QtObject {
                 client.unread = event.unread;
                 client.refreshChats();
                 client.messageReceived(event.jid, event.message);
+            } else if (event.type === "chats") {
+                // History sync, an archive toggle, or a name arriving from the
+                // contact/group lists. The backend already coalesces these, so
+                // this is one refetch per burst rather than one per chat.
+                client.unread = event.unread;
+                client.refreshChats();
             }
         }
 

@@ -22,5 +22,5 @@ test('pins the dedicated PAM service name and store bounds', () => {
   const c = buildConfig({}, '/home/u', 9);
   assert.strictEqual(c.pamService, 'whatsapp-widget');
   assert.strictEqual(c.maxMessagesPerChat, 50);
-  assert.strictEqual(c.maxChats, 200);
+  assert.strictEqual(c.maxChats, 500);
 });

@@ -147,6 +147,20 @@ function createServer({ client, store, authenticator, endpointFile }) {
   });
 
   client.events.on('status', (status) => broadcast({ type: 'status', status }));
+
+  // A history sync fires 'chats' in bursts -- once per batch of conversations,
+  // per contact page, per group fetch. Coalesce them so a first-time sync does
+  // not push hundreds of near-identical frames at the widget, which would then
+  // refetch the whole chat list for each one.
+  let chatsTimer = null;
+  client.events.on('chats', () => {
+    if (chatsTimer) return;
+    chatsTimer = setTimeout(() => {
+      chatsTimer = null;
+      broadcast({ type: 'chats', unread: store.totalUnread() });
+    }, 300);
+    if (typeof chatsTimer.unref === 'function') chatsTimer.unref();
+  });
   client.events.on('message', ({ jid, message }) => {
     broadcast({ type: 'message', jid, message, unread: store.totalUnread() });
   });

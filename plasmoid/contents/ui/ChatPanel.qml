@@ -27,6 +27,11 @@ ColumnLayout {
     property string activeJid: ""
     // Free-text filter over the chat list, driven by the header's search box.
     property string filter: ""
+    // Whether the list is showing archived conversations instead of active
+    // ones. Archive state is read-only here: it is set on the phone (or
+    // another linked device) and arrives over chats.update. The widget never
+    // writes it back, so nothing it does can rearrange the real account.
+    property bool showArchived: false
 
     spacing: 0
 
@@ -42,11 +47,35 @@ ColumnLayout {
      */
     readonly property var visibleChats: {
         const needle = panel.filter.trim().toLowerCase();
-        if (needle.length === 0) return panel.backend.chats;
+        if (needle.length > 0) {
+            // Search deliberately spans the archive. A chat you filed away is
+            // still a chat you might be looking for, and having search quietly
+            // skip half the account is worse than showing one extra result.
+            return panel.backend.chats.filter(function (chat) {
+                return String(chat.name).toLowerCase().indexOf(needle) >= 0;
+            });
+        }
         return panel.backend.chats.filter(function (chat) {
-            return String(chat.name).toLowerCase().indexOf(needle) >= 0;
+            return Boolean(chat.archived) === panel.showArchived;
         });
     }
+
+    readonly property var archivedChats: panel.backend.chats.filter(function (chat) {
+        return Boolean(chat.archived);
+    })
+
+    readonly property int archivedUnread: {
+        var total = 0;
+        for (var i = 0; i < panel.archivedChats.length; i++) {
+            total += panel.archivedChats[i].unread || 0;
+        }
+        return total;
+    }
+
+    // The archive row is pointless while searching, since search already
+    // reaches into it.
+    readonly property bool archiveRowVisible: panel.filter.trim().length === 0
+        && (panel.showArchived || panel.archivedChats.length > 0)
 
     // The chat list carries display names; a conversation only knows its JID.
     function chatName(jid) {
@@ -149,8 +178,58 @@ ColumnLayout {
         Layout.fillHeight: true
         visible: panel.activeJid === ""
 
+        PlasmaComponents.ItemDelegate {
+            id: archiveRow
+
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: visible ? implicitHeight : 0
+            visible: panel.archiveRowVisible
+            onClicked: panel.showArchived = !panel.showArchived
+
+            contentItem: RowLayout {
+                spacing: panel.rowPadding
+
+                Kirigami.Icon {
+                    Layout.preferredWidth: Kirigami.Units.iconSizes.small
+                    Layout.preferredHeight: Kirigami.Units.iconSizes.small
+                    source: panel.showArchived ? "go-previous" : "archive-symbolic"
+                    isMask: true
+                    color: Kirigami.Theme.highlightColor
+                }
+
+                PlasmaComponents.Label {
+                    Layout.fillWidth: true
+                    elide: Text.ElideRight
+                    font.bold: panel.showArchived
+                    text: i18n("Archived")
+                }
+
+                // Only ever an unread count, never the number of archived
+                // chats: the whole point of archiving is that the chat stops
+                // asking for attention.
+                PlasmaComponents.Label {
+                    visible: !panel.showArchived && panel.archivedUnread > 0
+                    color: Kirigami.Theme.disabledTextColor
+                    text: panel.archivedUnread > 99 ? "99+" : String(panel.archivedUnread)
+                }
+            }
+        }
+
+        Kirigami.Separator {
+            id: archiveSeparator
+            anchors.top: archiveRow.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            visible: archiveRow.visible
+        }
+
         PlasmaComponents.ScrollView {
-            anchors.fill: parent
+            anchors.top: archiveRow.visible ? archiveSeparator.bottom : parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
 
             // ScrollView takes a single Flickable as its content item and
             // drives it; the ListView must therefore not be anchored or sized
@@ -311,9 +390,13 @@ ColumnLayout {
             wrapMode: Text.WordWrap
             color: Kirigami.Theme.disabledTextColor
             visible: chatList.count === 0
-            text: panel.filter.trim().length > 0
-                ? i18nc("@info:placeholder", "No chats match “%1”.", panel.filter.trim())
-                : i18nc("@info:placeholder", "No chats yet.")
+            text: {
+                if (panel.filter.trim().length > 0)
+                    return i18nc("@info:placeholder", "No chats match “%1”.", panel.filter.trim());
+                if (panel.showArchived)
+                    return i18nc("@info:placeholder", "No archived chats.");
+                return i18nc("@info:placeholder", "No chats yet.");
+            }
         }
     }
 
