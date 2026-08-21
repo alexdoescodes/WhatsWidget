@@ -216,6 +216,29 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
    * be restored, and so a hidden chat does not silently reappear as a new one
    * the next time somebody writes in it.
    */
+  /**
+   * Record where a message's downloaded media landed on disk.
+   *
+   * Kept on the message rather than a side table so it persists with it and a
+   * restart does not re-download everything already cached.
+   */
+  function setMediaPath(rawJid, messageId, filePath) {
+    const chat = chats.get(canonical(rawJid));
+    if (!chat) return false;
+    const message = chat.messages.find((m) => m.id === messageId);
+    if (!message || message.mediaPath === filePath) return false;
+    message.mediaPath = filePath || '';
+    revision += 1;
+    return true;
+  }
+
+  /** The stored message, so its media descriptor can be used to fetch it. */
+  function getMessage(rawJid, messageId) {
+    const chat = chats.get(canonical(rawJid));
+    if (!chat) return null;
+    return chat.messages.find((m) => m.id === messageId) || null;
+  }
+
   /** Record where a chat's cached profile picture lives on disk. */
   function setAvatar(rawJid, path) {
     const chat = chats.get(canonical(rawJid));
@@ -374,6 +397,8 @@ function createStore({ maxMessagesPerChat = 50, maxChats = 200 } = {}) {
     addMessage,
     upsertChat,
     setAvatar,
+    setMediaPath,
+    getMessage,
     setHidden,
     recordContactName,
     forgetWeakName,

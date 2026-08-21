@@ -67,6 +67,10 @@ ColumnLayout {
         });
     }
 
+    // Rows currently in the open conversation. Exposed so the widget's own
+    // tests can assert on the model without reaching into it.
+    readonly property int messageCount: messageModel.count
+
     readonly property int hiddenCount: panel.backend.chats.filter(function (chat) {
         return Boolean(chat.hidden);
     }).length
@@ -162,6 +166,48 @@ ColumnLayout {
                        : Qt.formatDate(when, Locale.ShortFormat);
     }
 
+    /** The cached profile picture path for a chat, or "" if there is none. */
+    function avatarFor(jid) {
+        var chats = panel.backend.chats;
+        for (var i = 0; i < chats.length; i++) {
+            if (chats[i].jid === jid) return chats[i].avatar || "";
+        }
+        return "";
+    }
+
+    /**
+     * Normalise a message into the exact set of roles the list uses.
+     *
+     * ListModel takes its roles from the first row appended and ignores keys
+     * that appear later, so every row has to carry every role — including the
+     * media ones, even when it is a plain text message.
+     */
+    function messageRow(message) {
+        return {
+            id: String(message.id || ""),
+            fromMe: Boolean(message.fromMe),
+            text: String(message.text || ""),
+            timestamp: Number(message.timestamp || 0),
+            mediaKind: (message.media && message.media.kind) ? String(message.media.kind) : "",
+            mediaPath: String(message.mediaPath || "")
+        };
+    }
+
+    /** Fetch a row's media and write the resulting path back into the model. */
+    function requestMedia(row) {
+        if (row.mediaKind === "" || row.mediaPath !== "") return;
+        var index = row.index;
+        var wanted = panel.activeJid;
+        panel.backend.fetchMedia(wanted, row.id, function (path) {
+            // The user may have moved on while the download ran; writing into
+            // the model then would land on whatever row now sits at that index.
+            if (path === "" || panel.activeJid !== wanted) return;
+            if (index < 0 || index >= messageModel.count) return;
+            if (messageModel.get(index).id !== row.id) return;
+            messageModel.setProperty(index, "mediaPath", path);
+        });
+    }
+
     function openChat(jid) {
         panel.activeJid = jid;
         messageModel.clear();
@@ -169,7 +215,9 @@ ColumnLayout {
             // A load that raced with closing the chat must not paint into the
             // one that is open now.
             if (err || panel.activeJid !== jid) return;
-            for (var i = 0; i < messages.length; i++) messageModel.append(messages[i]);
+            for (var i = 0; i < messages.length; i++) {
+                messageModel.append(panel.messageRow(messages[i]));
+            }
         });
         panel.backend.markRead(jid);
     }
@@ -193,7 +241,8 @@ ColumnLayout {
             // The backend does not write sent messages to its store; Baileys
             // echoes them back as an inbound event, which the handler below
             // deliberately ignores. So this append is the only one.
-            messageModel.append({ id: "local", fromMe: true, text: text, timestamp: 0 });
+            messageModel.append(panel.messageRow(
+                { id: "local", fromMe: true, text: text, timestamp: 0 }));
         });
     }
 
@@ -208,7 +257,7 @@ ColumnLayout {
             // show every sent message twice.
             if (message.fromMe) return;
             if (jid !== panel.activeJid) return;
-            messageModel.append(message);
+            messageModel.append(panel.messageRow(message));
             panel.backend.markRead(jid);
         }
     }
@@ -524,33 +573,132 @@ ColumnLayout {
 
                 required property bool fromMe
                 required property string text
+                required property string id
+                required property int index
+                // Flat string roles, not a nested object: ListModel fixes its
+                // roles from the FIRST row appended (so a chat whose oldest
+                // message is plain text would never gain a media role at all),
+                // and it converts nested objects into models of their own.
+                // Every append goes through panel.messageRow() so all rows
+                // carry all roles.
+                required property string mediaKind
+                required property string mediaPath
+
+                readonly property bool hasMedia: messageRow.mediaKind !== ""
+                // Only pictures are worth showing inline; a video or a
+                // document opens in whatever the desktop uses for it.
+                readonly property bool isPicture: messageRow.mediaKind === "image"
+                    || messageRow.mediaKind === "sticker"
+                readonly property bool pictureReady: messageRow.isPicture
+                    && messageRow.mediaPath !== ""
 
                 width: messageList.width
-                height: bubble.height
+                height: Math.max(bubble.height, senderAvatar.visible ? senderAvatar.height : 0)
+
+                // Whose message it is, for anything but our own. In a group
+                // this is the only cue to who is talking.
+                ChatAvatar {
+                    id: senderAvatar
+
+                    anchors.left: parent.left
+                    anchors.bottom: bubble.bottom
+                    width: Kirigami.Units.gridUnit * 1.2
+                    height: width
+                    visible: !messageRow.fromMe
+                    jid: panel.activeJid
+                    name: panel.chatName(panel.activeJid)
+                    source: panel.avatarFor(panel.activeJid)
+                }
 
                 Rectangle {
                     id: bubble
 
                     anchors.right: messageRow.fromMe ? parent.right : undefined
-                    anchors.left: messageRow.fromMe ? undefined : parent.left
-                    width: Math.min(bubbleText.implicitWidth + Kirigami.Units.largeSpacing * 2,
-                                    messageRow.width * 0.82)
-                    height: bubbleText.implicitHeight + Kirigami.Units.smallSpacing * 2
+                    anchors.left: messageRow.fromMe ? undefined : senderAvatar.right
+                    anchors.leftMargin: messageRow.fromMe ? 0 : Kirigami.Units.smallSpacing
+                    width: Math.min(
+                        messageRow.pictureReady
+                            ? Math.max(mediaImage.paintedWidth, bubbleText.implicitWidth)
+                              + Kirigami.Units.largeSpacing * 2
+                            : bubbleText.implicitWidth + Kirigami.Units.largeSpacing * 2,
+                        messageRow.width * 0.82)
+                    height: bubbleContent.implicitHeight + Kirigami.Units.smallSpacing * 2
                     radius: Kirigami.Units.cornerRadius * 2
                     color: messageRow.fromMe ? Kirigami.Theme.highlightColor
                                              : Kirigami.Theme.alternateBackgroundColor
 
-                    PlasmaComponents.Label {
-                        id: bubbleText
+                    ColumnLayout {
+                        id: bubbleContent
                         anchors.centerIn: parent
                         width: parent.width - Kirigami.Units.largeSpacing * 2
-                        wrapMode: Text.WordWrap
-                        text: messageRow.text
-                        // The highlight colour is a background here, so the
-                        // theme's normal text colour is not guaranteed to be
-                        // readable on it.
-                        color: messageRow.fromMe ? Kirigami.Theme.highlightedTextColor
-                                                 : Kirigami.Theme.textColor
+                        spacing: Kirigami.Units.smallSpacing
+
+                        Image {
+                            id: mediaImage
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: messageRow.pictureReady
+                                ? Math.min(implicitHeight * (width / Math.max(implicitWidth, 1)),
+                                           Kirigami.Units.gridUnit * 12)
+                                : 0
+                            visible: messageRow.pictureReady
+                            source: messageRow.pictureReady
+                                ? "file://" + messageRow.mediaPath : ""
+                            fillMode: Image.PreserveAspectFit
+                            asynchronous: true
+                        }
+
+                        // Everything that is not shown inline: a labelled row
+                        // that hands the file to the desktop's own viewer.
+                        PlasmaComponents.Button {
+                            Layout.fillWidth: true
+                            visible: messageRow.hasMedia && !messageRow.isPicture
+                            icon.name: {
+                                switch (messageRow.mediaKind) {
+                                case "video": return "media-playback-start";
+                                case "audio": return "audio-volume-high";
+                                default: return "document-open";
+                                }
+                            }
+                            text: messageRow.mediaPath === ""
+                                ? i18nc("@action:button", "Download")
+                                : i18nc("@action:button", "Open")
+                            onClicked: {
+                                if (messageRow.mediaPath !== "") {
+                                    Qt.openUrlExternally("file://" + messageRow.mediaPath);
+                                    return;
+                                }
+                                panel.requestMedia(messageRow);
+                            }
+                        }
+
+                        PlasmaComponents.Label {
+                            id: bubbleText
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            visible: messageRow.text !== ""
+                            text: messageRow.text
+                            // The highlight colour is a background here, so
+                            // the theme's normal text colour is not guaranteed
+                            // to be readable on it.
+                            color: messageRow.fromMe ? Kirigami.Theme.highlightedTextColor
+                                                     : Kirigami.Theme.textColor
+                        }
+                    }
+
+                    // Clicking a picture opens it full size in the desktop's
+                    // image viewer, since the bubble is only ever a thumbnail.
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: messageRow.pictureReady
+                        onClicked: Qt.openUrlExternally("file://" + messageRow.mediaPath)
+                    }
+                }
+
+                // Pictures fetch themselves; anything heavier waits to be
+                // asked for, which is what the Download button is.
+                Component.onCompleted: {
+                    if (messageRow.isPicture && messageRow.mediaPath === "") {
+                        panel.requestMedia(messageRow);
                     }
                 }
             }

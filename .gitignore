@@ -27,6 +27,10 @@ creds.json
 # The chat cache: message text at rest. Lives in ~/.local/share by default.
 chats.json
 chats.json.tmp
+# Downloaded media and cached profile pictures: the user's conversations and
+# personal images of their contacts. Same reasoning as the session directory.
+avatars/
+media/
 app-state-sync-*.json
 pre-key-*.json
 sender-key-*.json

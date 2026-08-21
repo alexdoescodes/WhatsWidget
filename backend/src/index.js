@@ -5,6 +5,8 @@ const { buildConfig } = require('./config');
 const { createStore } = require('./store');
 const { createPersistence } = require('./persist');
 const { createAvatarCache } = require('./avatars');
+const { createMediaCache } = require('./media');
+const { downloadContentFromMessage } = require('baileys');
 const { createAuthenticator } = require('./auth-pam');
 const { createWhatsAppClient } = require('./whatsapp');
 const { createServer } = require('./server');
@@ -38,7 +40,27 @@ async function main() {
     dir: config.avatarDir,
     fetchUrl: (jid, type) => client.profilePictureUrl(jid, type),
   });
-  const server = createServer({ client, store, authenticator, endpointFile: config.endpointFile });
+  const media = createMediaCache({
+    dir: config.mediaDir,
+    // Baileys hands back a stream of decrypted bytes; the cap is enforced
+    // while reading so an oversized file cannot be pulled into memory whole
+    // before anyone notices how big it is.
+    download: async (info, kind, maxBytes) => {
+      const stream = await downloadContentFromMessage(info, kind);
+      const chunks = [];
+      let total = 0;
+      for await (const chunk of stream) {
+        total += chunk.length;
+        if (total > maxBytes) throw new Error('media larger than the cap');
+        chunks.push(chunk);
+      }
+      return Buffer.concat(chunks);
+    },
+  });
+
+  const server = createServer({
+    client, store, authenticator, media, endpointFile: config.endpointFile,
+  });
 
   const { port } = await server.listen();
   console.log(`whatsapp-widget backend listening on 127.0.0.1:${port}`);

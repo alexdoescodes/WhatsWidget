@@ -20,6 +20,9 @@ function buildConfig(env = process.env, homedir = os.homedir(), uid = process.ge
     // Cached profile pictures, 0700. Loaded by the widget over file://, since
     // QML's Image cannot send the bearer header -- see avatars.js.
     avatarDir: path.join(dataDir, 'avatars'),
+    // Downloaded media, 0700. Same reasoning as avatarDir: the widget loads
+    // these over file:// because QML's Image cannot send the bearer header.
+    mediaDir: path.join(dataDir, 'media'),
     // Chat cache. Holds message text, so it is written 0600 -- see persist.js.
     storeFile: path.join(dataDir, 'chats.json'),
     // Dedicated PAM service: see plan Global Constraints. Never 'login'.

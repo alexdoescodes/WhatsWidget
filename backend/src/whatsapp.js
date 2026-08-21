@@ -4,16 +4,29 @@ const fs = require('node:fs');
 const { EventEmitter } = require('node:events');
 const baileys = require('baileys');
 const QRCode = require('qrcode');
+const { describeMedia, mediaLabel, unwrap } = require('./media');
 
 const { DisconnectReason, useMultiFileAuthState } = baileys;
 
-/** Pull display text out of the many shapes a WhatsApp message can take. */
-function extractText(message) {
+/**
+ * Pull display text out of the many shapes a WhatsApp message can take.
+ *
+ * Media returns its caption, or a label naming what it is. Only a genuinely
+ * unrecognised shape falls through -- a photo is no longer described to the
+ * user as an unsupported message when the widget can in fact show it.
+ */
+function extractText(rawMessage) {
+  const message = unwrap(rawMessage);
   if (!message) return '';
   if (message.conversation) return message.conversation;
   if (message.extendedTextMessage?.text) return message.extendedTextMessage.text;
-  if (message.imageMessage?.caption) return message.imageMessage.caption;
-  if (message.videoMessage?.caption) return message.videoMessage.caption;
+
+  const media = describeMedia(message);
+  if (media) return mediaLabel(media);
+
+  // Protocol traffic (revokes, key distribution) is not a message the user
+  // sent or received, and must not show up in the panel as one.
+  if (message.protocolMessage || message.senderKeyDistributionMessage) return '';
   return '[unsupported message]';
 }
 
@@ -175,6 +188,8 @@ function createWhatsAppClient({
             text: extractText(waMessage.message),
             timestamp: Number(waMessage.messageTimestamp) || 0,
           };
+          const media = describeMedia(waMessage.message);
+          if (media) message.media = media;
           // pushName is the SENDER's name. On our own messages that is the
           // user, and in a group it is whoever spoke last -- neither is the
           // name of the conversation. Only offer it for an incoming 1:1
@@ -212,12 +227,15 @@ function createWhatsAppClient({
           if (!isConversation(jid)) continue;
           // Never increments unread: these are historical, and the phone
           // already told us the real per-chat count above.
-          store.addMessage(jid, {
+          const historic = {
             id: waMessage.key.id,
             fromMe: Boolean(waMessage.key.fromMe),
             text: extractText(waMessage.message),
             timestamp: toNumber(waMessage.messageTimestamp),
-          }, { incrementUnread: false });
+          };
+          const historicMedia = describeMedia(waMessage.message);
+          if (historicMedia) historic.media = historicMedia;
+          store.addMessage(jid, historic, { incrementUnread: false });
         }
 
         events.emit('chats');

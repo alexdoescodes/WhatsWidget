@@ -23,7 +23,7 @@ function timingSafeEqual(a, b) {
  * ever exists in a 0600 file under the user's runtime dir, and non-loopback
  * peers are refused outright.
  */
-function createServer({ client, store, authenticator, endpointFile }) {
+function createServer({ client, store, authenticator, media, endpointFile }) {
   const token = crypto.randomBytes(32).toString('hex');
   const httpServer = http.createServer(handleRequest);
   const wss = new WebSocketServer({ noServer: true });
@@ -129,6 +129,26 @@ function createServer({ client, store, authenticator, endpointFile }) {
         res.writeHead(204);
         return res.end();
       }
+    }
+
+    // Media is fetched on demand rather than up front: a chat's history can
+    // carry hundreds of photos and videos, and downloading them because a
+    // panel scrolled past would be both slow and rude to the user's data plan.
+    if (segments[0] === 'chats' && segments.length === 5
+        && segments[2] === 'messages' && segments[4] === 'media') {
+      if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' });
+
+      const jid = decodeURIComponent(segments[1]);
+      const messageId = decodeURIComponent(segments[3]);
+      const message = store.getMessage(jid, messageId);
+      if (!message || !message.media) return json(res, 404, { error: 'no media' });
+
+      if (message.mediaPath) return json(res, 200, { path: message.mediaPath });
+
+      const file = await media.ensure(messageId, message.media);
+      if (!file) return json(res, 502, { error: 'download failed' });
+      store.setMediaPath(jid, messageId, file);
+      return json(res, 200, { path: file });
     }
 
     if (req.method === 'POST' && url.pathname === '/unlock') {

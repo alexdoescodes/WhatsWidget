@@ -233,6 +233,24 @@ QtObject {
         });
     }
 
+    /**
+     * Ask the backend to download a message's media, and report where it put
+     * it. Media is fetched on demand rather than with the message: a chat's
+     * history can carry hundreds of photos, and pulling them all because a
+     * panel scrolled past would be slow and rude to the user's data.
+     */
+    function fetchMedia(jid, messageId, callback) {
+        request("POST", "/chats/" + encodeURIComponent(jid)
+                + "/messages/" + encodeURIComponent(messageId) + "/media",
+                {}, function (err, data) {
+            if (err || !data || !data.path) {
+                if (callback) callback("");
+                return;
+            }
+            if (callback) callback(data.path);
+        });
+    }
+
     function markRead(jid) {
         request("POST", "/chats/" + encodeURIComponent(jid) + "/read", {}, function (err) {
             // The mark did not happen, so there is no new unread count to go

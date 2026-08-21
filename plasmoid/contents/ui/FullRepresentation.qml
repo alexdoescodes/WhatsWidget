@@ -96,6 +96,7 @@ Item {
                     visible: full.chatOpen
                     jid: chatPanel.activeJid
                     name: chatPanel.chatName(chatPanel.activeJid)
+                    source: chatPanel.avatarFor(chatPanel.activeJid)
                 }
 
                 PlasmaComponents.Label {

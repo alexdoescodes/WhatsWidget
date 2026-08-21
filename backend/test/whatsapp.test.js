@@ -99,12 +99,30 @@ test('does not count our own outgoing messages as unread', async () => {
   assert.strictEqual(store.totalUnread(), 0);
 });
 
-test('extractText handles plain and extended text, and unsupported kinds', () => {
+test('extractText names media instead of calling it unsupported', () => {
   assert.strictEqual(extractText({ conversation: 'a' }), 'a');
   assert.strictEqual(extractText({ extendedTextMessage: { text: 'b' } }), 'b');
-  assert.strictEqual(extractText({ imageMessage: { caption: 'c' } }), 'c');
-  assert.strictEqual(extractText({ stickerMessage: {} }), '[unsupported message]');
   assert.strictEqual(extractText(null), '');
+
+  // A caption is the message; without one, say what the thing is. These used
+  // to come through as "[unsupported message]" even though the widget can now
+  // fetch and show them.
+  assert.strictEqual(extractText({ imageMessage: { caption: 'c' } }), 'c');
+  assert.strictEqual(extractText({ imageMessage: {} }), 'Photo');
+  assert.strictEqual(extractText({ videoMessage: {} }), 'Video');
+  assert.strictEqual(extractText({ stickerMessage: {} }), 'Sticker');
+  assert.strictEqual(extractText({ audioMessage: { seconds: 7 } }), 'Voice message');
+  assert.strictEqual(extractText({ documentMessage: { fileName: 'x.pdf' } }), 'x.pdf');
+
+  // View-once and disappearing messages wrap the real payload a level down.
+  assert.strictEqual(
+    extractText({ viewOnceMessageV2: { message: { imageMessage: {} } } }), 'Photo');
+
+  // Protocol traffic is not a message the user sent or received.
+  assert.strictEqual(extractText({ protocolMessage: { type: 0 } }), '');
+
+  // A genuinely unknown shape still says so.
+  assert.strictEqual(extractText({ somethingNew: {} }), '[unsupported message]');
 });
 
 test('duplicate close events arm only one reconnect', async () => {
